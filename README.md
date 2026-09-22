@@ -144,3 +144,9 @@ pkill -f gzclient || true
 ## 当前边界
 
 该版本用于跑通 ROS 2 仿真控制链，不包含夹爪、MoveIt、逆运动学、CAD 网格或真实硬件驱动。后续可以在保持关节命名不变的情况下替换外观模型、增加末端执行器并接入 MoveIt 2。
+
+## 许可证
+
+Copyright 2026 Xrain118
+
+本项目采用 Apache License 2.0 授权，完整条款见 [LICENSE](LICENSE) 文件。`dragonfly_arm` 包的 `package.xml` 中 `<license>` 字段已相应声明为 `Apache-2.0`。
