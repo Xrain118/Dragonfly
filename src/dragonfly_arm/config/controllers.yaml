@@ -1,27 +1,18 @@
 controller_manager:
   ros__parameters:
-    update_rate: 50
-
+    update_rate: 100
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
-
     arm_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+    tilt_controller:
       type: joint_trajectory_controller/JointTrajectoryController
 
 arm_controller:
   ros__parameters:
-    joints:
-      - joint_1
-      - joint_2
-      - joint_3
-      - joint_4
-      - joint_5
-      - joint_6
-    command_interfaces:
-      - position
-    state_interfaces:
-      - position
-      - velocity
+    joints: [joint_1, joint_2, joint_3, joint_4, joint_5]
+    command_interfaces: [position]
+    state_interfaces: [position, velocity]
     state_publish_rate: 50.0
     action_monitor_rate: 20.0
     allow_partial_joints_goal: false
@@ -35,4 +26,23 @@ arm_controller:
       joint_3: {trajectory: 0.20, goal: 0.05}
       joint_4: {trajectory: 0.20, goal: 0.05}
       joint_5: {trajectory: 0.20, goal: 0.05}
-      joint_6: {trajectory: 0.20, goal: 0.05}
+
+tilt_controller:
+  ros__parameters:
+    joints: [unit_a_outer_joint, unit_a_inner_joint, unit_b_outer_joint, unit_b_inner_joint, unit_c_outer_joint, unit_c_inner_joint]
+    command_interfaces: [position]
+    state_interfaces: [position, velocity]
+    state_publish_rate: 50.0
+    action_monitor_rate: 20.0
+    allow_partial_joints_goal: false
+    allow_nonzero_velocity_at_trajectory_end: false
+    open_loop_control: false
+    constraints:
+      stopped_velocity_tolerance: 0.05
+      goal_time: 2.0
+      unit_a_outer_joint: {trajectory: 0.15, goal: 0.04}
+      unit_a_inner_joint: {trajectory: 0.15, goal: 0.04}
+      unit_b_outer_joint: {trajectory: 0.15, goal: 0.04}
+      unit_b_inner_joint: {trajectory: 0.15, goal: 0.04}
+      unit_c_outer_joint: {trajectory: 0.15, goal: 0.04}
+      unit_c_inner_joint: {trajectory: 0.15, goal: 0.04}

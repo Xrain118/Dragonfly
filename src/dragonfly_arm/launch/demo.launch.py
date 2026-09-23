@@ -1,4 +1,4 @@
-"""Launch Gazebo and run the Dragonfly arm trajectory demonstration once."""
+"""Launch the vector platform and demonstrate arm and tilt motions once."""
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription

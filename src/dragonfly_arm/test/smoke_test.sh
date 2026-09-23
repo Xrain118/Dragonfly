@@ -25,37 +25,15 @@ trap cleanup EXIT
 ros2 launch dragonfly_arm demo.launch.py gui:=false >"${smoke_log}" 2>&1 &
 launch_pid=$!
 
-controllers_ready=false
-for _ in {1..60}; do
-  if ! kill -0 "${launch_pid}" 2>/dev/null; then
-    echo "Launch process exited before the controllers became ready." >&2
-    cat "${smoke_log}" >&2
-    exit 3
-  fi
-
-  controller_output="$(ros2 control list_controllers 2>/dev/null || true)"
-  if grep -q "joint_state_broadcaster.*active" <<<"${controller_output}" && \
-     grep -q "arm_controller.*active" <<<"${controller_output}"; then
-    controllers_ready=true
-    break
-  fi
-  sleep 1
-done
-
-if [[ "${controllers_ready}" != true ]]; then
-  echo "Controllers did not become active within 60 seconds." >&2
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if ! timeout 190 python3 "${script_dir}/verify_runtime.py"; then
+  echo "Controllers or joint states did not become ready." >&2
   cat "${smoke_log}" >&2
   exit 4
 fi
 
-if ! timeout 10 ros2 topic echo /joint_states --once >/dev/null; then
-  echo "No /joint_states message was received." >&2
-  cat "${smoke_log}" >&2
-  exit 5
-fi
-
 trajectory_succeeded=false
-for _ in {1..30}; do
+for _ in {1..50}; do
   if grep -q "Trajectory completed successfully" "${smoke_log}"; then
     trajectory_succeeded=true
     break
@@ -70,6 +48,12 @@ if [[ "${trajectory_succeeded}" != true ]]; then
   echo "The demonstration trajectory did not complete successfully." >&2
   cat "${smoke_log}" >&2
   exit 6
+fi
+
+if grep -Eq '\[ERROR\]|\[FATAL\]' "${smoke_log}"; then
+  echo "Simulation logged a startup/runtime error despite completed trajectories."
+  cat "${smoke_log}"
+  exit 7
 fi
 
 echo "Dragonfly arm smoke test passed."

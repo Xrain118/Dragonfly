@@ -1,0 +1,61 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:macro name="arm_joint" params="name parent child z axis">
+    <joint name="${name}" type="revolute">
+      <parent link="${parent}"/><child link="${child}"/><origin xyz="0 0 ${z}"/>
+      <axis xyz="${axis}"/>
+      <limit lower="${-sim.joint_limit}" upper="${sim.joint_limit}" effort="${sim.arm_effort}" velocity="${sim.arm_velocity}"/>
+      <dynamics damping="0.1" friction="0.01"/>
+    </joint>
+  </xacro:macro>
+  <xacro:macro name="arm_segment" params="name length mass">
+    <link name="${name}">
+      <!-- Paired carbon rails with visible spacing, a servo and axle. -->
+      <xacro:box_shape x="${est.arm_rail_depth}" y="${est.arm_rail_width}" z="${length-0.012}" xyz="0 ${est.arm_half_width} ${length/2}"/>
+      <xacro:box_shape x="${est.arm_rail_depth}" y="${est.arm_rail_width}" z="${length-0.012}" xyz="0 ${-est.arm_half_width} ${length/2}"/>
+      <xacro:box_shape x="0.022" y="0.032" z="0.026" xyz="0 0 0.015" material="servo"/>
+      <xacro:cylinder_shape radius="0.007" length="0.052" rpy="${pi/2} 0 0" material="metal"/>
+      <xacro:box_inertial mass="${mass}" x="0.022" y="${2*est.arm_half_width+est.arm_rail_width}" z="${length}" xyz="0 0 ${length/2}"/>
+    </link>
+    <xacro:gazebo_color link="${name}"/>
+  </xacro:macro>
+  <xacro:macro name="five_axis_arm">
+    <xacro:fixed_box name="arm_mount_adapter" parent="uav_base_link" x="0.065" y="0.060" z="${-est.arm_mount_z-est.deck_z/2}" xyz="0 0 ${(est.arm_mount_z-est.deck_z/2)/2}" mass="${sim.arm_adapter_mass}"/>
+    <joint name="uav_to_arm_base" type="fixed">
+      <parent link="uav_base_link"/><child link="base_link"/>
+      <origin xyz="0 0 ${est.arm_mount_z}" rpy="${pi} 0 0"/>
+    </joint>
+    <link name="base_link">
+      <xacro:box_shape x="0.065" y="0.060" z="0.004" xyz="0 0 0.002"/>
+      <xacro:cylinder_shape radius="0.022" length="${est.base_to_yaw-0.004}" xyz="0 0 ${(est.base_to_yaw+0.004)/2}" material="servo"/>
+      <xacro:box_inertial mass="${sim.arm_base_mass}" x="0.065" y="0.060" z="${est.base_to_yaw}" xyz="0 0 ${est.base_to_yaw/2}"/>
+    </link>
+    <xacro:arm_joint name="joint_1" parent="base_link" child="shoulder_link" z="${est.base_to_yaw}" axis="0 0 1"/>
+    <link name="shoulder_link">
+      <xacro:box_shape x="0.030" y="0.042" z="${est.base_to_shoulder-est.base_to_yaw}" xyz="0 0 ${(est.base_to_shoulder-est.base_to_yaw)/2}" material="servo"/>
+      <xacro:box_inertial mass="${sim.shoulder_mass}" x="0.030" y="0.042" z="${est.base_to_shoulder-est.base_to_yaw}" xyz="0 0 ${(est.base_to_shoulder-est.base_to_yaw)/2}"/>
+    </link>
+    <xacro:arm_joint name="joint_2" parent="shoulder_link" child="upper_arm_link" z="${est.base_to_shoulder-est.base_to_yaw}" axis="0 1 0"/>
+    <xacro:arm_segment name="upper_arm_link" length="${est.upper_arm_length}" mass="${sim.upper_arm_mass}"/>
+    <xacro:arm_joint name="joint_3" parent="upper_arm_link" child="forearm_link" z="${est.upper_arm_length}" axis="0 1 0"/>
+    <xacro:arm_segment name="forearm_link" length="${est.forearm_length}" mass="${sim.forearm_mass}"/>
+    <xacro:arm_joint name="joint_4" parent="forearm_link" child="wrist_link" z="${est.forearm_length}" axis="0 1 0"/>
+    <xacro:arm_segment name="wrist_link" length="${est.wrist_length}" mass="${sim.wrist_mass}"/>
+    <xacro:arm_joint name="joint_5" parent="wrist_link" child="gripper_link" z="${est.wrist_length}" axis="0 0 1"/>
+    <link name="gripper_link">
+      <xacro:cylinder_shape radius="0.010" length="0.012" material="metal"/>
+      <!-- Closed fixed fingers. The physical gripper actuator is NOT joint_6. -->
+      <xacro:box_shape x="0.023" y="0.047" z="${est.gripper_length*0.35}" xyz="0 0 ${est.gripper_length*0.175}" material="servo"/>
+      <xacro:box_shape x="0.008" y="0.008" z="${est.gripper_length*0.36}" xyz="0 0.016 ${est.gripper_length*0.49}" rpy="0.50 0 0"/>
+      <xacro:box_shape x="0.008" y="0.008" z="${est.gripper_length*0.36}" xyz="0 -0.016 ${est.gripper_length*0.49}" rpy="-0.50 0 0"/>
+      <xacro:box_shape x="0.008" y="0.006" z="${est.gripper_length*0.34}" xyz="0 0.003 ${est.gripper_length*0.83}"/>
+      <xacro:box_shape x="0.008" y="0.006" z="${est.gripper_length*0.34}" xyz="0 -0.003 ${est.gripper_length*0.83}"/>
+      <xacro:box_inertial mass="${sim.gripper_mass}" x="0.023" y="0.047" z="${est.gripper_length}" xyz="0 0 ${est.gripper_length/2}"/>
+    </link>
+    <joint name="gripper_to_tool0" type="fixed"><parent link="gripper_link"/><child link="tool0"/><origin xyz="0 0 ${est.gripper_length}"/></joint>
+    <link name="tool0"/>
+    <xacro:gazebo_color link="base_link"/>
+    <xacro:gazebo_color link="shoulder_link"/>
+    <xacro:gazebo_color link="gripper_link"/>
+  </xacro:macro>
+</robot>

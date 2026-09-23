@@ -1,4 +1,4 @@
-"""Launch the Dragonfly arm in Gazebo Classic."""
+"""Launch the fixed-base vector hexarotor and five-axis arm in Gazebo Classic."""
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, RegisterEventHandler
@@ -34,7 +34,11 @@ def generate_launch_description():
         PythonLaunchDescriptionSource(
             PathJoinSubstitution([FindPackageShare("gazebo_ros"), "launch", "gazebo.launch.py"])
         ),
-        launch_arguments={"gui": gui, "pause": paused}.items(),
+        launch_arguments={
+            "gui": gui,
+            "pause": paused,
+            "world": PathJoinSubstitution([package_share, "worlds", "model_preview.world"]),
+        }.items(),
     )
 
     robot_state_publisher = Node(
@@ -56,6 +60,8 @@ def generate_launch_description():
             "dragonfly_arm",
             "-topic",
             "robot_description",
+            "-timeout",
+            "120",
             "-x",
             "0.0",
             "-y",
@@ -91,6 +97,14 @@ def generate_launch_description():
         output="screen",
     )
 
+    tilt_controller_spawner = Node(
+        package="controller_manager",
+        executable="spawner",
+        arguments=["tilt_controller", "--controller-manager", "/controller_manager",
+                   "--controller-manager-timeout", "60"],
+        output="screen",
+    )
+
     start_joint_state_broadcaster = RegisterEventHandler(
         OnProcessExit(
             target_action=spawn_robot,
@@ -101,7 +115,7 @@ def generate_launch_description():
     start_arm_controller = RegisterEventHandler(
         OnProcessExit(
             target_action=joint_state_broadcaster_spawner,
-            on_exit=[arm_controller_spawner],
+            on_exit=[arm_controller_spawner, tilt_controller_spawner],
         )
     )
 

@@ -1,0 +1,56 @@
+# SI units. 'measured' values supplied by the owner (arm length is approximate);
+# everything else is a
+# photo-based estimate or a simulation placeholder, NOT hardware calibration.
+measured:
+  triangle_side: 1.2
+  motor_spacing: 0.36
+  propeller_radius: 0.116
+  arm_total_length: 0.40
+estimated:
+  frame_tube_radius: 0.012
+  deck_x: 0.26
+  deck_y: 0.20
+  deck_z: 0.04
+  landing_height: 0.55
+  landing_half_width: 0.24
+  landing_half_length: 0.23
+  skid_length: 0.70
+  unit_height: 0.06
+  motor_radius: 0.015
+  motor_height: 0.020
+  motor_center_height: 0.025
+  blade_width: 0.018
+  blade_thickness: 0.002
+  arm_mount_z: -0.050
+  base_to_yaw: 0.020
+  base_to_shoulder: 0.045
+  upper_arm_length: 0.150
+  forearm_length: 0.085
+  wrist_length: 0.035
+  gripper_length: 0.085
+  arm_rail_width: 0.008
+  arm_rail_depth: 0.012
+  arm_half_width: 0.021
+simulation:
+  world_height: 1.60
+  joint_limit: 1.5707963267948966
+  arm_velocity: 0.6
+  tilt_velocity: 0.5
+  arm_effort: 5.0
+  tilt_effort: 8.0
+  # Placeholder masses in kg. Replace before flight/disturbance experiments.
+  deck_mass: 1.5
+  frame_tube_mass: 0.12
+  landing_leg_mass: 0.05
+  skid_mass: 0.07
+  mount_mass: 0.06
+  gimbal_mass: 0.06
+  motor_mass: 0.05
+  propeller_mass: 0.008
+  arm_base_mass: 0.10
+  arm_adapter_mass: 0.03
+  shoulder_mass: 0.08
+  upper_arm_mass: 0.14
+  forearm_mass: 0.10
+  wrist_mass: 0.06
+  gripper_mass: 0.10
