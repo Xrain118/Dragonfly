@@ -1,5 +1,6 @@
 """Plot recorded simulation truth, joint tracking and actuator diagnostics."""
 import csv
+import json
 import sys
 from pathlib import Path
 import matplotlib
@@ -9,6 +10,7 @@ import numpy as np
 
 def plot(directory):
     rows=list(csv.DictReader((directory/'flight.csv').open()))
+    events=json.loads((directory/'events.json').read_text()) if (directory/'events.json').exists() else {}
     def data(key):return np.array([float(r[key]) for r in rows])
     t=data('t');fig,axs=plt.subplots(4,2,figsize=(13,12),sharex=True)
     for axis in 'xyz':axs[0,0].plot(t,data('e'+axis),label=axis)
@@ -32,7 +34,9 @@ def plot(directory):
     axs[3,0].plot(t,data('force_residual'));axs[3,0].set_ylabel('Allocation force residual (N)')
     axs[3,1].plot(t,data('torque_residual'));axs[3,1].set_ylabel('Allocation torque residual (Nm)')
     for ax in axs.flat:
-        ax.grid(alpha=.25);ax.axvspan(14,44,color='green',alpha=.05);ax.axvspan(87,t[-1],color='orange',alpha=.07)
+        ax.grid(alpha=.25)
+        if 'experiment_start' in events:ax.axvspan(events['experiment_start'],events['experiment_start']+30,color='green',alpha=.05)
+        if 'left_start' in events:ax.axvspan(events['left_start'],t[-1],color='orange',alpha=.07)
     for ax in axs[-1]:ax.set_xlabel('Simulation time since arming (s)')
     fig.suptitle(directory.name+' | green: fixed-arm hover; orange: arm replay')
     fig.tight_layout();fig.savefig(directory/'curves.png',dpi=140);plt.close(fig)

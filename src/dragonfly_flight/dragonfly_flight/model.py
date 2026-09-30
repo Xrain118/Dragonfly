@@ -7,7 +7,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 import yaml
 from scipy.spatial.transform import Rotation
-from .core import HOME, ARM_NAMES, TILT_NAMES, Platform
+from .core import HOME, STOWED, VERTICAL, ARM_NAMES, TILT_NAMES, Platform
 
 def element(parent, tag, value=None, **attributes):
     node = ET.SubElement(parent, tag, attributes)
@@ -39,8 +39,8 @@ def link_poses(robot, positions=None):
             joints.remove(j)
     return poses
 
-def inertial_properties(robot):
-    poses=link_poses(robot)
+def inertial_properties(robot,positions=None):
+    poses=link_poses(robot,positions)
     bodies = []
     for link in robot.findall('link'):
         inertial = link.find('inertial')
@@ -72,10 +72,18 @@ def generate(arm_share, flight_share, output, mode='px4_actuators', step=.002):
             j.set('type', 'continuous')
             element(j, 'axis', xyz='0 0 1')
             element(j, 'limit', effort='10', velocity='1000')
+    # The controller is trimmed for the airborne straight-down configuration.
+    # Ground PX4 runs still spawn folded so the tool remains above the skids.
     mass, com, inertia = inertial_properties(robot)
+    stowed_positions={n:STOWED[i] for names in ARM_NAMES.values() for i,n in enumerate(names)}
+    stowed_mass, stowed_com, stowed_inertia = inertial_properties(robot,stowed_positions)
+    if not np.isclose(stowed_mass,mass):raise ValueError('Arm pose changed total mass')
     model = Platform(dimensions, cfg, mass, com, inertia)
+    initial_arm_pose = STOWED if mode == 'px4_actuators' else VERTICAL
     metadata = dict(dimensions=dimensions, config=cfg, mass=mass, com=com.tolist(), inertia=inertia.tolist(),
-                    motor_constant=model.kf, max_thrust=model.max_thrust, mode=mode)
+                    motor_constant=model.kf, max_thrust=model.max_thrust, mode=mode,
+                    initial_arm_pose=initial_arm_pose.tolist(),stowed_com=stowed_com.tolist(),
+                    stowed_inertia=stowed_inertia.tolist())
     (output/'model.json').write_text(json.dumps(metadata, indent=2))
     control = robot.find('ros2_control')
     for j in list(control.findall('joint')):
@@ -87,7 +95,7 @@ def generate(arm_share, flight_share, output, mode='px4_actuators', step=.002):
             interface = j.find('command_interface'); interface.set('name', 'effort')
             interface.find("param[@name='min']").text = str(-cfg['arm_effort'])
             interface.find("param[@name='max']").text = str(cfg['arm_effort'])
-            element(j.find("state_interface[@name='position']"), 'param', HOME[int(name[-1])-1], name='initial_value')
+            element(j.find("state_interface[@name='position']"), 'param', initial_arm_pose[int(name[-1])-1], name='initial_value')
             element(j, 'state_interface', name='effort')
     controllers = yaml.safe_load((arm_share/'config/controllers.yaml').read_text())
     controllers['controller_manager']['ros__parameters']['update_rate'] = 500

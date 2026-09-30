@@ -15,7 +15,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import JointState
 from std_msgs.msg import String
 from rosgraph_msgs.msg import Clock
-from dragonfly_flight.core import HOME
+from dragonfly_flight.core import VERTICAL
 
 out=Path(sys.argv[1] if len(sys.argv)>1 else '/home/ubuntu/Dragonfly/log/keyboard_live');out.mkdir(exist_ok=True)
 os.environ.update(ROS_DOMAIN_ID='76',ROS_LOCALHOST_ONLY='0')
@@ -39,6 +39,10 @@ def spin_until(predicate,timeout=60):
 def delay(seconds):
     start=clock[0];spin_until(lambda:clock[0]-start>=seconds,20)
 
+def wait_joint(side,joint,target,tolerance=math.radians(.8),timeout=15):
+    """Wait for the effort-driven joint, not merely the trajectory end time."""
+    spin_until(lambda:abs(state.get(f'{side}_joint_{joint+1}',math.inf)-target)<tolerance,timeout)
+
 def keyboard():
     master,slave=pty.openpty()
     child=subprocess.Popen(['ros2','run','dragonfly_flight','keyboard'],stdin=slave,stdout=log,stderr=log,start_new_session=True)
@@ -50,12 +54,19 @@ try:
     for side,key in [('left','L'),('right','R')]:
         for joint in range(5):
             if len(sys.argv)>2 and joint!=int(sys.argv[2]):continue
-            for direction,sign in [('+',1),('-',-1)]:
-                os.write(master,(key+str(joint+1)+direction).encode());delay(1.7)
-                measured=state[f'{side}_joint_{joint+1}']-HOME[joint]
-                assert abs(measured-sign*math.radians(2))<math.radians(.7),(side,joint,direction,measured,status[-3:])
-                checks.append(dict(side=side,joint=joint+1,key=direction,measured_deg=math.degrees(measured)))
-                os.write(master,b'H');delay(1.7)
+            os.write(master,(key+str(joint+1)+'+').encode())
+            wait_joint(side,joint,VERTICAL[joint]+math.radians(5))
+            delay(2.)
+            measured=state[f'{side}_joint_{joint+1}']-VERTICAL[joint]
+            assert abs(measured-math.radians(5))<math.radians(.8),(side,joint,'+',measured,status[-3:])
+            checks.append(dict(side=side,joint=joint+1,key='+',measured_deg=math.degrees(measured)))
+            os.write(master,b'-')
+            wait_joint(side,joint,VERTICAL[joint])
+            delay(2.)
+            returned=state[f'{side}_joint_{joint+1}']-VERTICAL[joint]
+            assert abs(returned)<math.radians(.8),(side,joint,'-',returned,status[-3:])
+            checks.append(dict(side=side,joint=joint+1,key='-',step_deg=math.degrees(returned-measured)))
+            os.write(master,b'H');delay(.7)
     os.write(master,b'P');delay(.8);os.write(master,b' ');delay(1.)
     assert any('Stopped arms' in value for value in status[-10:])
     os.write(master,b'\x1b');client.wait(timeout=5);os.close(master);master=None;client=None
@@ -64,6 +75,7 @@ try:
     os.killpg(client.pid,signal.SIGINT);client.wait(timeout=5)
     os.close(master);master=None;client=None;delay(.7)
     assert any('Stopped arms' in value for value in status) and runner.poll() is None
+    delay(3.)
     master,client=keyboard();os.write(master,b'P');delay(.8)
     os.killpg(client.pid,signal.SIGKILL);client.wait();client=None;os.close(master);master=None
     status.clear();delay(1.5);assert any('Stopped arms' in value for value in status)

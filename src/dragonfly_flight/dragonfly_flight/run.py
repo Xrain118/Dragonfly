@@ -90,10 +90,12 @@ def main():
         if args.record:
             start(['ros2','bag','record','-o',str(out/'bag'),'/clock','/dragonfly/truth','/joint_states','/dragonfly/efforts',
                    '/dragonfly/rotor_speeds','/dragonfly/tilt_efforts','/dragonfly/arm_status','/dragonfly/status','/dragonfly/diagnostics',
+                   '/dragonfly/reference_pose','/dragonfly/position_error','/dragonfly/position_error_norm',
+                   '/dragonfly/attitude_error','/dragonfly/attitude_error_norm','/dragonfly/arm_active','/dragonfly/ready',
                    '/left_arm_controller/controller_state','/right_arm_controller/controller_state',
                    '/fmu/out/vehicle_odometry','/fmu/out/vehicle_status_v1','/fmu/in/actuator_motors','/fmu/in/actuator_servos'], 'rosbag')
         runtime=start([sys.executable,'-m','dragonfly_flight.runtime','--output',str(out),'--scenario',args.scenario], 'controller')
-        print(f'Run: {out}\nKeyboard: ROS_LOCALHOST_ONLY=0 ROS_DOMAIN_ID={os.environ["ROS_DOMAIN_ID"]} ros2 run dragonfly_flight keyboard',flush=True)
+        print(f'Run: {out}\nKeyboard: bash src/dragonfly_flight/scripts/sim.sh keyboard\nMonitor: bash src/dragonfly_flight/scripts/sim.sh monitor',flush=True)
         while runtime.poll() is None:
             if gz.poll() is not None: raise RuntimeError('Gazebo exited; see gazebo.log')
             if any(p.poll() is not None for p in critical): raise RuntimeError('PX4 or DDS exited; see run logs')

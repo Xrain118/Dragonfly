@@ -4,7 +4,13 @@ import numpy as np
 from scipy.optimize import lsq_linear
 from scipy.spatial.transform import Rotation
 
-HOME = np.array([0., 0., math.pi / 2, 0., 0.])
+# The flight profile has two deliberately different poses.  The firmware
+# home remains folded in dragonfly_arm; flight starts folded on the ground and
+# uses the straight-down pose as its airborne operating reference.
+STOWED = np.array([0., 0., math.pi / 2, 0., 0.])
+VERTICAL = np.zeros(5)
+# Kept as a compatibility name for the flight package's operating home.
+HOME = VERTICAL
 ARM_NAMES = {s: [f'{s}_joint_{i}' for i in range(1, 6)] for s in ('left', 'right')}
 TILT_NAMES = [f'unit_{u}_{a}_joint' for u in 'abc' for a in ('outer', 'inner')]
 NED_ENU = np.array([[0., 1., 0.], [1., 0., 0.], [0., 0., -1.]])
@@ -25,6 +31,10 @@ class Platform:
     def __init__(self, dimensions, config, mass, com, inertia):
         self.mass, self.com, self.inertia = mass, np.array(com), np.array(inertia)
         self.cfg = config
+        limits = dimensions['arm_kinematics']['joint_limits']
+        order = ('base', 'shoulder', 'elbow', 'wrist', 'roll')
+        self.arm_lower = np.array([limits[name]['lower'] for name in order])
+        self.arm_upper = np.array([limits[name]['upper'] for name in order])
         self.radius = dimensions['measured']['triangle_side'] / math.sqrt(3)
         self.spacing = dimensions['measured']['motor_spacing']
         e = dimensions['estimated']

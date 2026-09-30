@@ -15,7 +15,7 @@ from std_msgs.msg import String, Empty
 from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from sensor_msgs.msg import JointState
 from builtin_interfaces.msg import Duration
-from .core import HOME, ARM_NAMES, duration
+from .core import VERTICAL, ARM_NAMES, duration
 
 def trajectory(names, start, end, speed=.1, acceleration=.2):
     total=duration(end-start,speed,acceleration)
@@ -31,12 +31,15 @@ def trajectory(names, start, end, speed=.1, acceleration=.2):
     return msg,total
 
 class ArmCommands:
-    def __init__(self,node,cfg,clearance=None):
+    def __init__(self,node,cfg,clearance=None,lower=None,upper=None,initial_pose=None):
         self.node,self.cfg=node,cfg
         self.clearance=clearance
+        self.lower=np.full(5,-np.inf) if lower is None else np.asarray(lower,dtype=float)
+        self.upper=np.full(5,np.inf) if upper is None else np.asarray(upper,dtype=float)
+        self.initial_pose=VERTICAL.copy() if initial_pose is None else np.asarray(initial_pose,dtype=float).copy()
         self.q={};self.v={};self.side='left';self.joint=0
-        self.ready=False;self.busy_until=0.;self.heartbeat=-1.;self.manual=False
-        self.target={s:HOME.copy() for s in ARM_NAMES}; self.sequence=[]
+        self.ready=False;self.safe=False;self.busy_until=0.;self.heartbeat=-1.;self.manual=False
+        self.target={s:self.initial_pose.copy() for s in ARM_NAMES}; self.sequence=[]
         self.pub={s:node.create_publisher(JointTrajectory,f'/{s}_arm_controller/joint_trajectory',10) for s in ARM_NAMES}
         self.status=node.create_publisher(String,'/dragonfly/arm_status',10)
         node.create_subscription(JointState,'/joint_states',self.state,qos_profile_sensor_data)
@@ -50,20 +53,41 @@ class ArmCommands:
     def positions(self,side):return np.array([self.q[n] for n in ARM_NAMES[side]])
     def report(self,text):self.status.publish(String(data=text))
     def initialized(self):return all(n in self.q for n in ARM_NAMES['left']+ARM_NAMES['right'])
+    def limits(self):
+        span=math.radians(self.cfg['arm_range_degrees'])
+        return np.maximum(VERTICAL-span,self.lower),np.minimum(VERTICAL+span,self.upper)
+    def constrain(self,target):
+        lower,upper=self.limits();return np.clip(np.asarray(target,dtype=float),lower,upper)
+    def at(self,target,tolerance=math.radians(1)):
+        return self.initialized() and all(np.max(np.abs(self.positions(side)-target))<=tolerance for side in ARM_NAMES)
 
-    def move(self,side,target,manual=False):
+    def move(self,side,target,manual=False,constrain=True):
         now=self.now()
         if not self.initialized() or now-self.state_time>.2:
             self.report('Joint state missing or stale');return False
         if now<self.busy_until:return False
-        span=math.radians(self.cfg['arm_range_degrees'])
-        target=np.clip(target,HOME-span,HOME+span)
+        target=self.constrain(target) if constrain else np.asarray(target,dtype=float)
         if self.clearance and not self.clearance.allows(side,self.positions(side),target):
             self.sequence=[];self.report('Rejected: path approaches landing gear');return False
         self.target[side]=target
         msg,dt=trajectory(ARM_NAMES[side],self.positions(side),self.target[side],self.cfg['arm_speed'],self.cfg['arm_acceleration'])
         self.pub[side].publish(msg);self.busy_until=now+dt+.3;self.manual=manual
         self.report(f'{side} target {np.round(self.target[side],3).tolist()}');return True
+
+    def move_both(self,target,manual=False,constrain=True):
+        now=self.now()
+        if not self.initialized() or now-self.state_time>.2:
+            self.report('Joint state missing or stale');return False
+        if now<self.busy_until:return False
+        target=self.constrain(target) if constrain else np.asarray(target,dtype=float)
+        starts={side:self.positions(side) for side in ARM_NAMES}
+        if self.clearance and any(not self.clearance.allows(side,starts[side],target) for side in ARM_NAMES):
+            self.sequence=[];self.report('Rejected: deployment path approaches landing gear');return False
+        commands={side:trajectory(ARM_NAMES[side],starts[side],target,self.cfg['arm_speed'],self.cfg['arm_acceleration']) for side in ARM_NAMES}
+        for side,(msg,_) in commands.items():
+            self.pub[side].publish(msg);self.target[side]=target.copy()
+        self.busy_until=now+max(dt for _,dt in commands.values())+.3;self.manual=manual
+        self.report(f'both arms target {np.round(target,3).tolist()}');return True
 
     def stop(self):
         self.sequence=[];self.manual=False
@@ -72,19 +96,18 @@ class ArmCommands:
         for side in ARM_NAMES:
             q=self.positions(side);v=np.array([self.v.get(n,0.) for n in ARM_NAMES[side]])
             total=max(.1,float(np.max(np.abs(v)))/self.cfg['arm_acceleration'])
-            span=math.radians(self.cfg['arm_range_degrees'])
-            end=np.clip(q+.5*v*total,HOME-span,HOME+span)
+            end=self.constrain(q+.5*v*total)
             msg=JointTrajectory(joint_names=ARM_NAMES[side])
             for t in np.linspace(0,total,11):
-                p=JointTrajectoryPoint();p.positions=(q+v*t-.5*v*t*t/total).tolist()
+                p=JointTrajectoryPoint();p.positions=self.constrain(q+v*t-.5*v*t*t/total).tolist()
                 p.velocities=(v*(1-t/total)).tolist()
                 p.time_from_start=Duration(sec=int(t),nanosec=int(t%1*1e9));msg.points.append(p)
             msg.points[-1].positions=end.tolist();self.pub[side].publish(msg);self.target[side]=end;longest=max(longest,total)
         self.busy_until=self.now()+longest+.3;self.report('Stopped arms; flight controller remains active')
 
     def replay(self,side):
-        target=HOME.copy();target[1]+=math.radians(5)
-        self.sequence=[(side,HOME.copy(),0.),(side,target,2.),(side,HOME.copy(),0.)]
+        target=VERTICAL.copy();target[1]+=math.radians(5)
+        self.sequence=[(side,VERTICAL.copy(),0.),(side,target,2.),(side,VERTICAL.copy(),0.)]
 
     def key(self,msg):
         key=msg.data
@@ -97,14 +120,23 @@ class ArmCommands:
             if self.sequence or self.now()<self.busy_until:return
             if key.lower()=='p':self.replay(self.side);self.manual=True;return
             target=self.target[self.side].copy()
-            if key.lower()=='h':target=HOME.copy()
+            if key.lower()=='h':target=VERTICAL.copy()
             else:target[self.joint]+=math.radians(self.cfg['arm_step_degrees'])*(1 if key in ('+','=') else -1)
-            self.move(self.side,target,True)
+            bounded=self.constrain(target)
+            if np.allclose(bounded,self.target[self.side],atol=1e-12,rtol=0):
+                self.report(f'{self.side} J{self.joint+1}: joint or work-envelope limit reached');return
+            self.move(self.side,bounded,True)
         self.report(f'Selected {self.side} joint {self.joint+1}')
 
     def tick(self):
         now=self.now()
-        if self.manual and (time.monotonic()-self.heartbeat>.5 or now-self.state_time>.2 or not self.ready):self.stop()
+        if self.manual:
+            reason=None
+            if time.monotonic()-self.heartbeat>.5:reason='keyboard heartbeat missing'
+            elif now-self.state_time>.2:reason='joint state stale'
+            elif not self.safe:reason='flight left the 0.25 m / 8 deg arm-motion envelope'
+            if reason:
+                self.stop();self.report('Stopped arms: '+reason)
         if self.sequence and now>=self.busy_until:
             side,target,pause=self.sequence[0]
             if self.move(side,target,self.manual):self.sequence.pop(0);self.busy_until+=pause
@@ -119,7 +151,7 @@ def keyboard():
     hb=node.create_publisher(Empty,'/dragonfly/arm_heartbeat',10)
     node.create_subscription(String,'/dragonfly/arm_status',lambda m:print('\r'+m.data+' '*8,flush=True),10)
     saved=termios.tcgetattr(sys.stdin);last=0.
-    print('L/R arm | 1-5 joint | +/- 2 degrees | Space stop | H home | P replay | Esc exit')
+    print('L/R arm | 1-5 joint | +/- 5 degrees | Space stop | H vertical | P replay | Esc exit')
     try:
         tty.setcbreak(sys.stdin)
         while rclpy.ok():

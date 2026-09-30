@@ -10,4 +10,9 @@ source install-flight/setup.bash
 if [[ "${1:-}" == keyboard ]]; then
   exec ros2 run dragonfly_flight keyboard
 fi
+if [[ "${1:-}" == monitor ]]; then
+  layout="$(ros2 pkg prefix dragonfly_flight --share)/config/plotjuggler.xml"
+  exec ros2 run plotjuggler plotjuggler --nosplash --layout "$layout" \
+    --buffer_size 300 --start_streamer "ROS2 Topic Subscriber"
+fi
 exec ros2 run dragonfly_flight flight "$@"

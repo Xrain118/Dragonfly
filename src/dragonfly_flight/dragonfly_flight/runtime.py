@@ -11,13 +11,13 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from nav_msgs.msg import Odometry
-from geometry_msgs.msg import Wrench, PoseStamped, TransformStamped, WrenchStamped
-from std_msgs.msg import Bool, String, Float32MultiArray
+from geometry_msgs.msg import Wrench, PoseStamped, TransformStamped, WrenchStamped, Vector3Stamped
+from std_msgs.msg import Bool, String, Float32MultiArray, Float64
 from tf2_ros import TransformBroadcaster
 from control_msgs.msg import JointTrajectoryControllerState
 from px4_msgs.msg import (VehicleLocalPosition, VehicleOdometry, VehicleStatus, VehicleCommand,
                           VehicleCommandAck, OffboardControlMode, ActuatorMotors, ActuatorServos)
-from .core import Platform, Allocator, NED_ENU, FRD_FLU, px4_rotation, smoothstep, HOME
+from .core import Platform, Allocator, NED_ENU, FRD_FLU, px4_rotation, smoothstep, STOWED, VERTICAL
 from .arms import ArmCommands
 from .clearance import GearClearance
 
@@ -25,22 +25,37 @@ class Runtime(Node):
     def __init__(self,out,scenario):
         super().__init__('dragonfly_flight',parameter_overrides=[rclpy.parameter.Parameter('use_sim_time',value=True)])
         data=json.loads((out/'model.json').read_text());self.mode=data['mode'];self.out=out;self.scenario=scenario
-        self.model=Platform(data['dimensions'],data['config'],data['mass'],data['com'],data['inertia']);self.alloc=Allocator(self.model)
+        self.model=Platform(data['dimensions'],data['config'],data['mass'],data['com'],data['inertia'])
+        self.vertical_com=self.model.com.copy();self.vertical_inertia=self.model.inertia.copy()
+        if self.mode=='px4_actuators':
+            self.model.com=np.asarray(data['stowed_com']);self.model.inertia=np.asarray(data['stowed_inertia'])
+        self.alloc=Allocator(self.model)
         self.truth=None;self.local=None;self.odom=None;self.vehicle=None;self.offset=None
         self.local_time=-1.;self.odom_time=-1.;self.begin=None;self.start_height=None;self.home_xy=None
         self.last_command=-10.;self.last_t=None;self.failures=0;self.done=False;self.error=None;self.last_log=-1.
         self.target=np.array([0.,0.,self.model.cfg['hover_height']]);self.external_target=None
-        self.arms=ArmCommands(self,self.model.cfg,GearClearance(out/'robot.urdf'));self.initialized_arms=False;self.replay_index=0;self.replay_started=False
+        self.initial_arm_pose=np.asarray(data.get('initial_arm_pose',VERTICAL),dtype=float)
+        self.arms=ArmCommands(self,self.model.cfg,GearClearance(out/'robot.urdf'),self.model.arm_lower,self.model.arm_upper,self.initial_arm_pose)
+        self.initialized_arms=False;self.replay_index=0;self.replay_started=False
+        self.deployment_state='pending' if self.mode=='px4_actuators' else 'complete'
+        self.stable_since=None;self.deployment_deadline=None;self.experiment_start=None
         self.events={};self.previous_arm_busy=False
         self.force_probe=None;self.probe_samples=[]
         self.momentum=[];self.last_momentum=None;self.efforts=np.zeros(10);self.rotor_speeds=np.zeros(6)
-        self.arm_reference=np.tile(HOME,2)
+        self.arm_reference=np.tile(self.initial_arm_pose,2)
         self.tilt_efforts=np.zeros(6)
         for index,side in enumerate(('left','right')):
             self.create_subscription(JointTrajectoryControllerState,f'/{side}_arm_controller/controller_state',
                                      lambda m,i=index:self.on_arm_reference(m,i),qos_profile_sensor_data)
         self.status=self.create_publisher(String,'/dragonfly/status',10)
         self.diagnostics=self.create_publisher(Float32MultiArray,'/dragonfly/diagnostics',10)
+        self.reference_pose=self.create_publisher(PoseStamped,'/dragonfly/reference_pose',10)
+        self.position_error=self.create_publisher(Vector3Stamped,'/dragonfly/position_error',10)
+        self.position_error_norm=self.create_publisher(Float64,'/dragonfly/position_error_norm',10)
+        self.attitude_error=self.create_publisher(Vector3Stamped,'/dragonfly/attitude_error',10)
+        self.attitude_error_norm=self.create_publisher(Float64,'/dragonfly/attitude_error_norm',10)
+        self.arm_active=self.create_publisher(Bool,'/dragonfly/arm_active',10)
+        self.ready_pub=self.create_publisher(Bool,'/dragonfly/ready',10)
         self.create_subscription(Odometry,'/dragonfly/truth',self.on_truth,qos_profile_sensor_data)
         self.create_subscription(WrenchStamped,'/dragonfly/momentum',self.on_momentum,qos_profile_sensor_data)
         self.create_subscription(String,'/dragonfly/efforts',lambda m:setattr(self,'efforts',np.fromstring(m.data,sep=',')),qos_profile_sensor_data)
@@ -61,7 +76,7 @@ class Runtime(Node):
             self.servos=self.create_publisher(ActuatorServos,'/fmu/in/actuator_servos',10)
         self.ideal=self.create_publisher(Wrench,'/dragonfly/ideal_wrench',10) if self.mode=='ideal_wrench' else None
         self.file=open(out/'flight.csv','w',newline='');self.csv=csv.writer(self.file)
-        self.csv.writerow(['t','phase','x','y','z','rx','ry','rz','ex','ey','ez','angle','est_error','force_residual','torque_residual','saturated']+
+        self.csv.writerow(['t','phase','x','y','z','rx','ry','rz','ex','ey','ez','angle','eroll','epitch','eyaw','est_error','force_residual','torque_residual','saturated']+
                           [f'q{i}' for i in range(10)]+[f'effort{i}' for i in range(10)]+[f'f{i}' for i in range(6)]+[f'tilt{i}' for i in range(6)]+['est_angle']+[f'actual_tilt{i}' for i in range(6)]+[f'actual_f{i}' for i in range(6)]+[f'qref{i}' for i in range(10)]+[f'tilt_effort{i}' for i in range(6)])
         self.timer=self.create_timer(.01,self.tick)
         self.wall_start=time.monotonic();self.last_heartbeat=0.;self.get_logger().info(f'Mode {self.mode}; mass={self.model.mass:.3f}, com={self.model.com}')
@@ -89,12 +104,59 @@ class Runtime(Node):
         m=VehicleCommand(timestamp=int(self.now()*1e6),command=command,target_system=1,target_component=1,source_system=1,source_component=1,from_external=True,**params)
         self.commands.publish(m)
     def abort(self,reason):
-        self.error=reason;self.done=True;self.arms.ready=False;self.arms.stop()
+        self.error=reason;self.done=True;self.arms.ready=False;self.arms.safe=False;self.arms.stop()
         self.get_logger().error(reason);(self.out/'failure.txt').write_text(reason)
     def truth_state(self):
         m=self.truth;v=m.twist.twist;p=m.pose.pose.position;q=m.pose.pose.orientation
         rot=Rotation.from_quat([q.x,q.y,q.z,q.w]).as_matrix()
         return np.array([p.x,p.y,p.z]),np.array([v.linear.x,v.linear.y,v.linear.z]),rot,rot.T@np.array([v.angular.x,v.angular.y,v.angular.z])
+
+    def publish_monitor(self,tp,target,tr,arm_busy):
+        stamp=self.get_clock().now().to_msg();error=tp-target
+        reference=PoseStamped();reference.header.stamp=stamp;reference.header.frame_id='world'
+        reference.pose.position.x,reference.pose.position.y,reference.pose.position.z=target.tolist();reference.pose.orientation.w=1.
+        position=Vector3Stamped();position.header=reference.header
+        position.vector.x,position.vector.y,position.vector.z=error.tolist()
+        euler=Rotation.from_matrix(tr).as_euler('xyz')
+        attitude=Vector3Stamped();attitude.header=reference.header
+        attitude.vector.x,attitude.vector.y,attitude.vector.z=euler.tolist()
+        self.reference_pose.publish(reference);self.position_error.publish(position)
+        self.position_error_norm.publish(Float64(data=float(np.linalg.norm(error))))
+        self.attitude_error.publish(attitude)
+        self.attitude_error_norm.publish(Float64(data=float(Rotation.from_matrix(tr).magnitude())))
+        self.arm_active.publish(Bool(data=arm_busy));self.ready_pub.publish(Bool(data=self.arms.ready))
+        return euler
+
+    def update_deployment(self,t,elapsed,stable):
+        """Deploy after a genuine hover dwell; return whether airborne work may start."""
+        if self.deployment_state=='complete':return True
+        if self.deployment_state=='pending':
+            if elapsed<=14 or not stable:
+                self.stable_since=None;return False
+            if self.stable_since is None:self.stable_since=t
+            if t-self.stable_since<2:return False
+            if not self.arms.move_both(VERTICAL):return False
+            # Use one fixed vertical-workspace model for the whole deployment.
+            # Do not follow the changing multibody CoM/inertia: its reaction is
+            # deliberately left for the flight feedback loop to reject.
+            self.model.com=self.vertical_com.copy();self.model.inertia=self.vertical_inertia.copy()
+            self.deployment_state='moving';self.deployment_deadline=self.arms.busy_until+5
+            self.events['deployment_start']=elapsed;(self.out/'events.json').write_text(json.dumps(self.events,indent=2))
+            self.stable_since=None;return False
+        if self.deployment_state=='moving':
+            if t<self.arms.busy_until:return False
+            if not self.arms.at(VERTICAL):
+                if t>self.deployment_deadline:self.abort('Arm deployment did not reach the vertical pose within 1 degree')
+                return False
+            self.deployment_state='recovering';self.events['deployment_end']=elapsed
+            (self.out/'events.json').write_text(json.dumps(self.events,indent=2));self.stable_since=None
+            return False
+        if not stable:
+            self.stable_since=None;return False
+        if self.stable_since is None:self.stable_since=t
+        if t-self.stable_since<2:return False
+        self.deployment_state='complete';self.experiment_start=elapsed;self.events['experiment_start']=elapsed
+        (self.out/'events.json').write_text(json.dumps(self.events,indent=2));return True
 
     def tick(self):
         try:self.step()
@@ -105,8 +167,7 @@ class Runtime(Node):
         if self.truth is None or not self.arms.initialized():return
         tp,tv,tr,tw=self.truth_state()
         if not self.initialized_arms:
-            for side in ('left','right'):
-                self.arms.busy_until=0.;self.arms.move(side,HOME)
+            self.arms.busy_until=0.;self.arms.move_both(self.initial_arm_pose,constrain=False)
             self.initialized_arms=True
         self.arms.tick()
         arm_busy=bool(self.arms.sequence or t<self.arms.busy_until)
@@ -115,10 +176,11 @@ class Runtime(Node):
             (self.out/'events.json').write_text(json.dumps(self.events,indent=2))
         self.previous_arm_busy=arm_busy
         if self.mode=='physics':
-            self.arms.ready=True
+            self.arms.ready=True;self.arms.safe=True
             if t>3 and not self.replay_started:self.arms.replay('left');self.replay_started=True
             q=[self.arms.q[n] for n in sum(ARM_NAMES_LIST,[])]
-            self.csv.writerow([t,'physics',*tp,0,0,1.6,*tv,Rotation.from_matrix(tr).magnitude(),0,0,0,0,*q,*self.efforts,*np.zeros(25),*self.arm_reference,*self.tilt_efforts])
+            target=np.array([0.,0.,1.6]);euler=self.publish_monitor(tp,target,tr,arm_busy)
+            self.csv.writerow([t,'physics',*tp,*target,*(tp-target),Rotation.from_matrix(tr).magnitude(),*euler,0,0,0,0,*q,*self.efforts,*np.zeros(25),*self.arm_reference,*self.tilt_efforts])
             if t>16:
                 np.savetxt(self.out/'momentum.csv',self.momentum,delimiter=',',header='t,px,py,pz,lx,ly,lz');self.done=True
             return
@@ -149,20 +211,38 @@ class Runtime(Node):
             self.begin=t;self.start_height=p[2];self.home_xy=p[:2].copy();self.get_logger().info('Flight started')
         elapsed=t-self.begin
         target=np.r_[self.home_xy,self.start_height+(self.model.cfg['hover_height']-self.start_height)*smoothstep(elapsed/6)]
-        phase='takeoff' if elapsed<14 else 'hover'
-        if self.scenario=='acceptance' and elapsed>=44:
+        angle=Rotation.from_matrix(tr).magnitude();base_error=np.linalg.norm(tp-target)
+        stable=elapsed>14 and base_error<.10 and angle<math.radians(3)
+        deployed=self.update_deployment(t,elapsed,stable)
+        if self.done:return
+        if self.mode!='px4_actuators' and self.experiment_start is None and stable:
+            self.experiment_start=elapsed;self.events['experiment_start']=elapsed
+            (self.out/'events.json').write_text(json.dumps(self.events,indent=2))
+        test_elapsed=None if self.experiment_start is None else elapsed-self.experiment_start
+        if elapsed<14:phase='takeoff'
+        elif self.deployment_state=='pending':phase='predeploy'
+        elif self.deployment_state=='moving':phase='deploying'
+        elif self.deployment_state=='recovering':phase='deployment_recovery'
+        else:phase='hover'
+        if self.scenario=='acceptance' and test_elapsed is not None and test_elapsed>=30:
             targets=[np.array([.2,0,0]),np.array([.2,.2,0]),np.array([.2,.2,.1]),np.zeros(3)]
-            k=min(3,int((elapsed-44)/10));s=smoothstep(((elapsed-44)%10)/3)
+            track_elapsed=test_elapsed-30
+            k=min(3,int(track_elapsed/10));s=smoothstep((track_elapsed%10)/3)
             start=np.zeros(3) if k==0 else targets[k-1]
-            target+=start+(targets[k]-start)*s if elapsed<84 else np.zeros(3)
-            phase=f'track{k}' if elapsed<84 else 'arms'
-        if self.scenario=='manual' and self.external_target is not None:target=self.external_target
+            target+=start+(targets[k]-start)*s if track_elapsed<40 else np.zeros(3)
+            phase=f'track{k}' if track_elapsed<40 else 'arms'
+        if self.scenario=='manual' and deployed and self.external_target is not None:target=self.external_target
         self.target=target
-        error=np.linalg.norm(tp-target);angle=Rotation.from_matrix(tr).magnitude()
-        self.arms.ready=elapsed>14 and error<.10 and angle<math.radians(3)
-        if self.scenario=='acceptance' and elapsed>87 and self.replay_index<2:
+        error=np.linalg.norm(tp-target);stable=elapsed>14 and error<.10 and angle<math.radians(3)
+        available=not self.arms.sequence and t>=self.arms.busy_until
+        self.arms.ready=bool(deployed and stable and available)
+        self.arms.safe=bool(deployed and error<.25 and angle<math.radians(8))
+        if self.scenario=='acceptance' and test_elapsed is not None and test_elapsed>73 and self.replay_index<2:
             if self.arms.ready and not self.arms.sequence and t>self.arms.busy_until+5:
-                self.arms.replay('left' if self.replay_index==0 else 'right');self.replay_index+=1
+                side='left' if self.replay_index==0 else 'right'
+                self.arms.replay(side);self.arms.ready=False
+                self.events[side+'_start']=elapsed;self.replay_index+=1
+                (self.out/'events.json').write_text(json.dumps(self.events,indent=2))
         if phase=='arms':phase='arms_'+('left' if self.replay_index<=1 else 'right')
         desired=self.model.control(p,v,rot,omega,target)
         if self.scenario in ('freefall','force_x','force_y','force_z') and elapsed>=14 and self.last_momentum is not None:
@@ -202,15 +282,17 @@ class Runtime(Node):
                        or np.any(abs(self.efforts)>.99*self.model.cfg['arm_effort']) or np.any(abs(self.tilt_efforts)>.99*self.model.cfg['tilt_effort']))
         q=[self.arms.q[n] for n in sum(ARM_NAMES_LIST,[])]
         actual_f=self.model.kf*self.rotor_speeds**2
-        self.csv.writerow([elapsed,phase,*tp,*target,*(tp-target),angle,np.linalg.norm(p-tp),np.linalg.norm(residual[:3]),np.linalg.norm(residual[3:]),int(saturated),*q,*self.efforts,*z,Rotation.from_matrix(rot.T@tr).magnitude(),*actual,*actual_f,*self.arm_reference,*self.tilt_efforts])
+        arm_busy=bool(self.arms.sequence or t<self.arms.busy_until)
+        euler=self.publish_monitor(tp,target,tr,arm_busy)
+        self.csv.writerow([elapsed,phase,*tp,*target,*(tp-target),angle,*euler,np.linalg.norm(p-tp),np.linalg.norm(residual[:3]),np.linalg.norm(residual[3:]),int(saturated),*q,*self.efforts,*z,Rotation.from_matrix(rot.T@tr).magnitude(),*actual,*actual_f,*self.arm_reference,*self.tilt_efforts])
         self.diagnostics.publish(Float32MultiArray(data=[*desired.tolist(),*residual.tolist(),*z.tolist()]))
         if t-self.last_log>2:
             self.status.publish(String(data=f'{phase}: position_error={error:.3f} attitude_deg={math.degrees(angle):.2f} ready={self.arms.ready}'))
             self.get_logger().info(f'{elapsed:.1f}s {phase} p={np.round(tp,3)} error={error:.3f} angle={math.degrees(angle):.2f}');self.file.flush();self.last_log=t
         if elapsed>8 and (error>1.5 or angle>math.radians(60)):self.abort('Flight departed test envelope')
-        if self.scenario=='hover' and elapsed>=44:self.done=True
+        if self.scenario=='hover' and test_elapsed is not None and test_elapsed>=30:self.done=True
         if self.scenario=='acceptance' and self.replay_index==2 and not self.arms.sequence and t>self.arms.busy_until+6:self.done=True
-        if self.scenario=='acceptance' and elapsed>150:self.abort('Acceptance sequence did not finish in 150 seconds')
+        if self.scenario=='acceptance' and elapsed>220:self.abort('Acceptance sequence did not finish in 220 seconds')
 
 ARM_NAMES_LIST=[[f'{s}_joint_{i}' for i in range(1,6)] for s in ('left','right')]
 

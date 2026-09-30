@@ -2,7 +2,7 @@ import math
 from pathlib import Path
 import numpy as np
 import yaml
-from dragonfly_flight.core import Platform, Allocator, px4_rotation, HOME
+from dragonfly_flight.core import Platform, Allocator, px4_rotation, HOME, STOWED, VERTICAL
 from dragonfly_flight.arms import trajectory
 
 def platform():
@@ -10,6 +10,11 @@ def platform():
     dimensions=yaml.safe_load((root/'dragonfly_arm/config/model_dimensions.yaml').read_text())
     cfg=yaml.safe_load((root/'dragonfly_flight/config/flight.yaml').read_text())
     return Platform(dimensions,cfg,4.0,[.03,0,-.05],np.diag([.3,.3,.6]))
+
+def test_stowed_and_vertical_pose_constants():
+    assert np.allclose(STOWED,[0,0,math.pi/2,0,0])
+    assert np.allclose(VERTICAL,np.zeros(5))
+    assert np.array_equal(HOME,VERTICAL)
 
 def test_group_axes_and_lever_arms():
     m=platform();p,n=m.geometry([.2,-.1,-.3,.15,.1,.3])

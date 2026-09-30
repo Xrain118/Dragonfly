@@ -11,10 +11,10 @@ tilt_kd: 0.25
 arm_effort: 5.0
 arm_speed: 0.10
 arm_acceleration: 0.20
-arm_step_degrees: 2.0
+arm_step_degrees: 5.0
 arm_range_degrees: 10.0
 # Effort JTC simulation gains, ordered base/shoulder/elbow/wrist/roll.
-arm_kp: [12.0, 30.0, 20.0, 5.0, 10.0]
+arm_kp: [30.0, 30.0, 20.0, 5.0, 10.0]
 arm_ki: [1.0, 3.0, 2.0, 0.5, 1.0]
 arm_kd: [1.0, 1.0, 0.5, 0.1, 0.03]
 position_kp: [2.0, 2.0, 3.0]
