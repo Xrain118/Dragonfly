@@ -10,19 +10,19 @@ smoke_log="${TMPDIR:-/tmp}/dragonfly_arm_smoke_$$.log"
 launch_pid=""
 
 cleanup() {
-  if [[ -n "${launch_pid}" ]] && kill -0 "${launch_pid}" 2>/dev/null; then
-    kill -INT "${launch_pid}" 2>/dev/null || true
+  if [[ -n "${launch_pid}" ]] && kill -0 -- "-${launch_pid}" 2>/dev/null; then
+    kill -INT -- "-${launch_pid}" 2>/dev/null || true
     for _ in {1..10}; do
-      kill -0 "${launch_pid}" 2>/dev/null || break
+      kill -0 -- "-${launch_pid}" 2>/dev/null || break
       sleep 1
     done
-    kill -TERM "${launch_pid}" 2>/dev/null || true
+    kill -TERM -- "-${launch_pid}" 2>/dev/null || true
     wait "${launch_pid}" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
 
-ros2 launch dragonfly_arm demo.launch.py gui:=false >"${smoke_log}" 2>&1 &
+setsid ros2 launch dragonfly_arm demo.launch.py gui:=false >"${smoke_log}" 2>&1 &
 launch_pid=$!
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -56,5 +56,9 @@ if grep -Eq '\[ERROR\]|\[FATAL\]' "${smoke_log}"; then
   exit 7
 fi
 
-echo "Dragonfly arm smoke test passed."
+if [[ -n "${1:-}" ]]; then
+  python3 "${script_dir}/capture_gazebo.py" "$1"
+fi
+
+echo "Dragonfly dual-arm smoke test passed."
 echo "Log: ${smoke_log}"

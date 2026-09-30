@@ -1,4 +1,4 @@
-"""Launch the vector platform and demonstrate arm and tilt motions once."""
+"""Launch the vector platform and demonstrate dual-arm and tilt motions once."""
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription

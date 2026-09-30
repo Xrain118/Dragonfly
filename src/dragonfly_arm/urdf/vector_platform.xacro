@@ -47,7 +47,7 @@
     </link>
     <joint name="${name}_outer_joint" type="revolute">
       <parent link="${name}_mount_link"/><child link="${name}_outer_link"/>
-      <axis xyz="1 0 0"/><limit lower="${-sim.joint_limit}" upper="${sim.joint_limit}" effort="${sim.tilt_effort}" velocity="${sim.tilt_velocity}"/>
+      <axis xyz="1 0 0"/><limit lower="${-sim.tilt_joint_limit}" upper="${sim.tilt_joint_limit}" effort="${sim.tilt_effort}" velocity="${sim.tilt_velocity}"/>
       <dynamics damping="0.1" friction="0.01"/>
     </joint>
     <link name="${name}_outer_link">
@@ -57,7 +57,7 @@
     </link>
     <joint name="${name}_inner_joint" type="revolute">
       <parent link="${name}_outer_link"/><child link="${name}_carrier_link"/>
-      <axis xyz="0 1 0"/><limit lower="${-sim.joint_limit}" upper="${sim.joint_limit}" effort="${sim.tilt_effort}" velocity="${sim.tilt_velocity}"/>
+      <axis xyz="0 1 0"/><limit lower="${-sim.tilt_joint_limit}" upper="${sim.tilt_joint_limit}" effort="${sim.tilt_effort}" velocity="${sim.tilt_velocity}"/>
       <dynamics damping="0.1" friction="0.01"/>
     </joint>
     <link name="${name}_carrier_link">

@@ -1,5 +1,7 @@
 build/
 install/
+build-flight/
+install-flight/
 log/
 __pycache__/
 *.pyc

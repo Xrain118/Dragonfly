@@ -30,7 +30,8 @@
     <collision><origin xyz="${xyz}" rpy="${rpy}"/><geometry><cylinder radius="${radius}" length="${length}"/></geometry></collision>
   </xacro:macro>
   <xacro:macro name="gazebo_color" params="link color:=DarkGrey">
-    <gazebo reference="${link}"><material>Gazebo/${color}</material></gazebo>
+    <!-- Harmonic reads the URDF visual material above directly.  Classic
+         Gazebo/* material scripts produce a migration warning in gz-sim. -->
   </xacro:macro>
   <xacro:macro name="fixed_box" params="name parent x y z xyz rpy:='0 0 0' mass material:=carbon color:=DarkGrey">
     <joint name="${name}_joint" type="fixed"><parent link="${parent}"/><child link="${name}"/><origin xyz="${xyz}" rpy="${rpy}"/></joint>
@@ -55,9 +56,9 @@
     </link>
     <xacro:gazebo_color link="${name}"/>
   </xacro:macro>
-  <xacro:macro name="controlled_joint" params="name">
+  <xacro:macro name="controlled_joint" params="name lower:=${-sim.tilt_joint_limit} upper:=${sim.tilt_joint_limit}">
     <joint name="${name}">
-      <command_interface name="position"><param name="min">${-sim.joint_limit}</param><param name="max">${sim.joint_limit}</param></command_interface>
+      <command_interface name="position"><param name="min">${lower}</param><param name="max">${upper}</param></command_interface>
       <state_interface name="position"/><state_interface name="velocity"/>
     </joint>
   </xacro:macro>

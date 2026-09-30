@@ -1,11 +1,28 @@
-# SI units. 'measured' values supplied by the owner (arm length is approximate);
-# everything else is a
-# photo-based estimate or a simulation placeholder, NOT hardware calibration.
+# SI units. RoArm-M3 kinematic geometry is sourced from RoArm-M3_config.h.
+# Platform geometry remains measured, photo-estimated, or simulation-only as marked.
 measured:
   triangle_side: 1.2
   motor_spacing: 0.36
   propeller_radius: 0.116
-  arm_total_length: 0.40
+  arm_spacing: 0.30
+arm_kinematics:
+  # Active EEMode=1 geometry in RoArm-M3_config.h, converted from mm to m.
+  # Coordinates are expressed in the arm base frame: +X forward, +Y left,
+  # +Z upward.  Joint order is base, shoulder, elbow, wrist, roll.
+  base_to_shoulder: 0.12606
+  shoulder_to_elbow_x: 0.03000
+  shoulder_to_elbow_z: 0.23682
+  elbow_to_wrist_x: 0.00000
+  elbow_to_wrist_z: 0.14449
+  wrist_to_tool_x: 0.01369
+  wrist_to_tool_z: 0.17167
+  home: [0.0, 0.0, 1.5707963267948966, 0.0, 0.0]
+  joint_limits:
+    base: {lower: -3.141592653589793, upper: 3.141592653589793}
+    shoulder: {lower: -1.5707963267948966, upper: 1.5707963267948966}
+    elbow: {lower: 0.0, upper: 3.141592653589793}
+    wrist: {lower: -1.5707963267948966, upper: 1.5707963267948966}
+    roll: {lower: -3.141592653589793, upper: 3.141592653589793}
 estimated:
   frame_tube_radius: 0.012
   deck_x: 0.26
@@ -22,18 +39,17 @@ estimated:
   blade_width: 0.018
   blade_thickness: 0.002
   arm_mount_z: -0.050
-  base_to_yaw: 0.020
-  base_to_shoulder: 0.045
-  upper_arm_length: 0.150
-  forearm_length: 0.085
-  wrist_length: 0.035
-  gripper_length: 0.085
+  # Common plate directly below the centre avionics deck.  It spans both
+  # 0.30 m-spaced arm bases so neither arm is attached outside the structure.
+  arm_mount_plate_x: 0.14
+  arm_mount_plate_y: 0.40
+  arm_mount_plate_z: 0.012
   arm_rail_width: 0.008
   arm_rail_depth: 0.012
   arm_half_width: 0.021
 simulation:
   world_height: 1.60
-  joint_limit: 1.5707963267948966
+  tilt_joint_limit: 1.5707963267948966
   arm_velocity: 0.6
   tilt_velocity: 0.5
   arm_effort: 5.0
@@ -49,6 +65,7 @@ simulation:
   propeller_mass: 0.008
   arm_base_mass: 0.10
   arm_adapter_mass: 0.03
+  arm_mount_plate_mass: 0.08
   shoulder_mass: 0.08
   upper_arm_mass: 0.14
   forearm_mass: 0.10
