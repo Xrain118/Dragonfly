@@ -24,7 +24,9 @@ PX4 模式从地面折叠姿态 `[0,0,π/2,0,0]` 起飞，在 1.6 m 连续稳定
 
 真实伪终端连接 Gazebo effort 关节，完成两臂×五关节×正反方向共 20 项点动。5°正向动作的实际读数为 4.44°–5.04°；Space、Esc、Ctrl+C、键盘心跳丢失和控制进程卡死保护均通过，结果见 `log/vertical_keyboard_full/keyboard_result.json`。紧急制动轨迹的每个插值点均限制在竖直姿态附近 ±10°与 URDF 物理限位的交集内。
 
-rosbag 已确认包含 `/dragonfly/truth`、`/dragonfly/reference_pose`、三轴及模长位置/姿态误差、`/dragonfly/arm_active` 和 `/dragonfly/ready`。所有监控消息使用仿真时间和 world ENU；位置误差符号为“实际减目标”。`sim.sh monitor` 的 PlotJuggler 布局包含“机身中心”和“抗扰效果”两页、300 s 缓冲，并已通过离屏加载检查。
+rosbag 已确认包含 `/dragonfly/truth`、`/dragonfly/reference_pose`、三轴及模长位置/姿态误差、`/dragonfly/arm_active` 和 `/dragonfly/ready`。带 header 的监控消息使用仿真时间和 world ENU；位置误差符号为“实际减目标”。Float64/Bool 话题没有 header，因此 PlotJuggler 布局关闭 `use_header_stamp`，统一按消息接收时间绘制全部实时曲线；bag 中 Pose/Vector 消息的原始仿真时间戳保持不变。
+
+2026-09-30 监控崩溃复查：在隔离的 ROS domain 83 中回放 `flight_20260930_212715/bag`，通过界面确认订阅 8 个话题后复现 `corrupted double-linked list`。GDB 主线程栈位于 Mesa `swrast_dri.so` 和 Qt `QPlatformBackingStore::composeAndFlush` 绘图路径。加入 `--disable_opengl` 后，相同数据可绘图；去掉重复的 `--start_streamer` 后，8 个话题保持订阅，曲线连续刷新数分钟未再崩溃。该版本的 `--start_streamer` 是启停切换，会关闭布局已启动的订阅。启动入口现使用 Qt IniFormat 写入 300 s 缓冲和 ROS2 Topic Subscriber 设置，并保留 7 个单图标签页。已通过配置文件和布局 XML 校验 300 s 值；界面中完整等待 300 s 滚动窗口仍未执行。
 
 ## 动量诊断与回归
 

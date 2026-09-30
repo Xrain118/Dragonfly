@@ -12,7 +12,22 @@ if [[ "${1:-}" == keyboard ]]; then
 fi
 if [[ "${1:-}" == monitor ]]; then
   layout="$(ros2 pkg prefix dragonfly_flight --share)/config/plotjuggler.xml"
-  exec ros2 run plotjuggler plotjuggler --nosplash --layout "$layout" \
-    --buffer_size 300 --start_streamer "ROS2 Topic Subscriber"
+  # PlotJuggler 3.17.2 restores these saved values AFTER its command-line options.
+  # Preserve other preferences, but enforce the monitor's buffer and subscriber.
+  python3 - <<'PY'
+from PyQt5.QtCore import QSettings
+settings = QSettings(QSettings.IniFormat, QSettings.UserScope,
+                     'PlotJuggler', 'io.plotjuggler.PlotJuggler')
+settings.setValue('MainWindow.streamingBufferValue', 300)
+settings.setValue('MainWindow.previousStreamingPlugin', 'ROS2 Topic Subscriber')
+settings.sync()
+if settings.status() != QSettings.NoError:
+    raise SystemExit('Unable to save PlotJuggler monitor preferences')
+PY
+  echo 'Monitor: choose Yes in Start Streaming, then OK for the selected Dragonfly topics.'
+  # WSLg/Mesa crashes in the OpenGL paint path; use the native raster canvas.
+  # The layout starts the ROS2 subscriber. --start_streamer would toggle it OFF.
+  exec ros2 run plotjuggler plotjuggler --nosplash --disable_opengl \
+    --layout "$layout" --buffer_size 300
 fi
 exec ros2 run dragonfly_flight flight "$@"

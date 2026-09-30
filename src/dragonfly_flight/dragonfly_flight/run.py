@@ -1,14 +1,85 @@
 """One process owner for a reproducible run; only children of this run are stopped."""
 import argparse
+import errno
+import fcntl
 import json
 import os
 from pathlib import Path
 import signal
+import socket
 import subprocess
 import sys
 import time
 from ament_index_python.packages import get_package_share_directory, get_package_prefix
 from .model import generate
+
+PX4_DDS_PORT = 8888
+PX4_RUN_LOCK = Path('/tmp/dragonfly_flight_px4.lock')
+
+
+def _processes_using_executable(executable):
+    """Return (pid, command) entries whose argv[0] is the requested executable."""
+    executable = Path(executable).resolve()
+    matches = []
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            argv = (entry/'cmdline').read_bytes().split(b'\0')
+            if argv[0] and Path(os.fsdecode(argv[0])).resolve() == executable:
+                matches.append((int(entry.name), ' '.join(os.fsdecode(arg) for arg in argv if arg)))
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+    return matches
+
+
+def _check_px4_resources(px4_binary, port=PX4_DDS_PORT):
+    """Fail before starting Gazebo when PX4 instance 0 or its DDS port is busy."""
+    blockers = []
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.bind(('0.0.0.0', port))
+    except OSError as error:
+        if error.errno != errno.EADDRINUSE:
+            raise
+        blockers.append(f'UDP {port} is already in use')
+    finally:
+        probe.close()
+
+    px4_processes = _processes_using_executable(px4_binary)
+    if px4_processes:
+        pids = ', '.join(str(pid) for pid, _ in px4_processes)
+        blockers.append(f'PX4 instance 0 is already running (PID {pids})')
+    if blockers:
+        details = '; '.join(blockers)
+        raise RuntimeError(
+            'Cannot start a second Dragonfly PX4 simulation: '+details+'. '
+            'The previous simulation is still active. Return to its main terminal and press Ctrl+C, '
+            'wait for "Stopping this run.", then start again.'
+        )
+
+
+def _acquire_px4_lock(px4_binary):
+    """Serialize preflight/startup and retain the lock for this runner's lifetime."""
+    lock = PX4_RUN_LOCK.open('a+')
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        lock.close()
+        raise RuntimeError(
+            'Cannot start a second Dragonfly PX4 simulation: another launcher owns the run lock. '
+            'Return to its main terminal and press Ctrl+C before starting again.'
+        ) from None
+    try:
+        _check_px4_resources(px4_binary)
+    except Exception:
+        lock.close()
+        raise
+    lock.seek(0)
+    lock.truncate()
+    lock.write(str(os.getpid()))
+    lock.flush()
+    return lock
 
 def main():
     parser=argparse.ArgumentParser()
@@ -23,6 +94,13 @@ def main():
     if args.scenario in ('freefall','force_x','force_y','force_z') and args.mode!='ideal_wrench':
         parser.error('Force diagnostics require --mode ideal_wrench')
     if args.scenario=='physics' and args.mode!='physics':parser.error('Use --mode physics --scenario physics together')
+    run_lock = None
+    if args.mode == 'px4_actuators':
+        px4_binary = Path(args.px4)/'build/px4_sitl_default/bin/px4'
+        try:
+            run_lock = _acquire_px4_lock(px4_binary)
+        except RuntimeError as error:
+            parser.exit(1, f'ERROR: {error}\n')
     out=Path(args.output).resolve()
     if (out/'world.sdf').exists():raise FileExistsError('Use a new output directory to preserve previous evidence: '+str(out))
     out.mkdir(parents=True,exist_ok=True)
@@ -84,9 +162,9 @@ def main():
             startup.write_text('. '+str(px4/'build/px4_sitl_default/etc/init.d-posix/rcS')+'\n'+
                                '\n'.join(f'param set {k} {v}' for k,v in params.items())+'\n')
             instance=out/'px4'; instance.mkdir(exist_ok=True)
-            critical.append(start(['MicroXRCEAgent','udp4','-p','8888'],'dds'))
-            critical.append(start([str(px4/'build/px4_sitl_default/bin/px4'),'-d',str(px4/'build/px4_sitl_default/etc'),'-s',str(startup)],
-                  'px4',cwd=instance,env=env))
+            critical.append(('DDS agent',start(['MicroXRCEAgent','udp4','-p',str(PX4_DDS_PORT)],'dds')))
+            critical.append(('PX4',start([str(px4/'build/px4_sitl_default/bin/px4'),'-d',str(px4/'build/px4_sitl_default/etc'),'-s',str(startup)],
+                  'px4',cwd=instance,env=env)))
         if args.record:
             start(['ros2','bag','record','-o',str(out/'bag'),'/clock','/dragonfly/truth','/joint_states','/dragonfly/efforts',
                    '/dragonfly/rotor_speeds','/dragonfly/tilt_efforts','/dragonfly/arm_status','/dragonfly/status','/dragonfly/diagnostics',
@@ -98,7 +176,9 @@ def main():
         print(f'Run: {out}\nKeyboard: bash src/dragonfly_flight/scripts/sim.sh keyboard\nMonitor: bash src/dragonfly_flight/scripts/sim.sh monitor',flush=True)
         while runtime.poll() is None:
             if gz.poll() is not None: raise RuntimeError('Gazebo exited; see gazebo.log')
-            if any(p.poll() is not None for p in critical): raise RuntimeError('PX4 or DDS exited; see run logs')
+            exited=[f'{name} (exit {process.returncode})' for name,process in critical if process.poll() is not None]
+            if exited:
+                raise RuntimeError('Critical process exited: '+', '.join(exited)+f'; see {out}/dds.log and px4.log')
             heartbeat=out/'controller.heartbeat'
             if heartbeat.exists() and time.time()-heartbeat.stat().st_mtime>1:
                 raise RuntimeError('Flight controller stalled for one wall-clock second')

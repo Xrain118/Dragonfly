@@ -52,6 +52,10 @@ bash /home/ubuntu/Dragonfly/src/dragonfly_flight/scripts/sim.sh monitor
 ros2 topic echo /dragonfly/truth --field pose.pose.position
 ```
 
+监控启动后，在 `Start Streaming?` 中选 `Yes`，接着保留预选的 8 个 `/dragonfly/...` 话题并点 `OK`。主窗口左侧应显示 `Stop`（表示正在接收）和 `Buffer: 300 sec`，时间轴持续增长；上方标签切换机体中心 XYZ、位置误差、姿态误差与机械臂状态。窗口可以最大化以显示全部标签。PlotJuggler 面板统一使用消息接收时间，以便没有 `header` 的 Float64/Bool 模长和状态话题与位姿曲线对齐；ROS 话题本身的 Pose/Vector header 仍保存仿真时间。
+
+本机 WSLg 的 OpenGL 绘图路径曾在订阅后出现 `corrupted double-linked list` / `malloc(): unaligned tcache chunk detected`。`monitor` 入口使用 `--disable_opengl` 规避该崩溃，保留 ROS2 订阅与曲线功能。不要再附加 `--start_streamer`：PlotJuggler 3.17.2 中它会在布局已启动订阅后再次切换启停，造成曲线停在第一小段。目录不存在和 `connectSlotsByName` 警告本身不代表监控失败。
+
 | 按键 | 动作 |
 |---|---|
 | L / R | 选择左 / 右臂，不产生运动 |
