@@ -4,6 +4,9 @@
   <xacro:property name="cfg" value="${xacro.load_yaml('../config/model_dimensions.yaml')}"/>
   <xacro:property name="meas" value="${cfg.measured}"/>
   <xacro:property name="kin" value="${cfg.arm_kinematics}"/>
+  <xacro:property name="hardware" value="${cfg.arm_hardware}"/>
+  <xacro:property name="weights" value="${cfg.arm_dynamics.mass_weights}"/>
+  <xacro:property name="mass_scale" value="${meas.arm_mass/(weights.base+weights.column+weights.upper_arm+weights.forearm+weights.wrist+weights.gripper)}"/>
   <xacro:property name="est" value="${cfg.estimated}"/>
   <xacro:property name="sim" value="${cfg.simulation}"/>
   <xacro:include filename="geometry_macros.xacro"/>

@@ -20,6 +20,9 @@
 #include <algorithm>
 #include <mutex>
 #include <sstream>
+#include <cmath>
+#include <stdexcept>
+#include <unordered_map>
 
 namespace dragonfly {
 using namespace gz::sim;
@@ -28,7 +31,8 @@ class Physics : public System, public ISystemConfigure, public ISystemPreUpdate,
   std::array<Entity,6> tilt{}; std::vector<Entity> arms, links, rotors;
   std::array<double,6> command{}, target{}, integral{}, tiltApplied{};
   std::vector<double> applied;
-  double rate{}, effort{}, kp{}, kd{}, armEffort{}, lastPublish{-1}; bool ideal{};
+  std::vector<double> armEfforts;
+  double rate{}, effort{}, kp{}, kd{}, lastPublish{-1}; bool ideal{};
   gz::transport::Node node; gz::transport::Node::Publisher truth, momentum, torques, rotorState, tiltTorques;
   std::mutex mutex; gz::msgs::Wrench wrench;
  public:
@@ -36,7 +40,7 @@ class Physics : public System, public ISystemConfigure, public ISystemPreUpdate,
                  EntityComponentManager &ecm, EventManager &) override {
     model = Model(entity); base = Link(model.LinkByName(ecm, "uav_base_link"));
     rate=sdf->Get<double>("tilt_rate"); effort=sdf->Get<double>("tilt_effort");
-    kp=sdf->Get<double>("tilt_kp"); kd=sdf->Get<double>("tilt_kd"); armEffort=sdf->Get<double>("arm_effort");
+    kp=sdf->Get<double>("tilt_kp"); kd=sdf->Get<double>("tilt_kd");
     ideal=sdf->Get<bool>("ideal");
     int k=0;
     for (auto unit : {"a","b","c"}) for (auto axis : {"outer","inner"}) {
@@ -46,8 +50,24 @@ class Physics : public System, public ISystemConfigure, public ISystemPreUpdate,
         std::lock_guard<std::mutex> lock(mutex); command[k]=std::clamp(m.data(),-1.57079632679,1.57079632679);
       }); ++k;
     }
-    for (auto side : {"left","right"}) for (int i=1;i<=5;++i)
-      arms.push_back(model.JointByName(ecm,std::string(side)+"_joint_"+std::to_string(i)));
+    std::unordered_map<std::string,double> limits;
+    if (!sdf->HasElement("arm_effort_limit"))
+      throw std::runtime_error("Missing named arm_effort_limit entries");
+    for (auto item=sdf->FindElement("arm_effort_limit"); item;
+         item=item->GetNextElement("arm_effort_limit")) {
+      auto name=item->Get<std::string>("joint");
+      double limit=item->Get<double>();
+      if (!std::isfinite(limit) || limit<=0 || !limits.emplace(name,limit).second)
+        throw std::runtime_error("Invalid / duplicate arm effort limit: "+name);
+    }
+    if (limits.size()!=10) throw std::runtime_error("Expected ten named arm effort limits");
+    for (auto side : {"left","right"}) for (int i=1;i<=5;++i) {
+      auto name=std::string(side)+"_joint_"+std::to_string(i);
+      auto joint=model.JointByName(ecm,name);
+      if (joint==kNullEntity || !limits.count(name))
+        throw std::runtime_error("Missing arm joint / effort limit: "+name);
+      arms.push_back(joint); armEfforts.push_back(limits.at(name));
+    }
     for(auto unit:{"a","b","c"}) for(auto side:{"left","right"}) {
       auto e=model.JointByName(ecm,std::string("unit_")+unit+"_rotor_"+side+"_joint");
       rotors.push_back(e); enableComponent<components::JointVelocity>(ecm,e);
@@ -81,7 +101,8 @@ class Physics : public System, public ISystemConfigure, public ISystemPreUpdate,
     }
     // Runs after ros2_control (priority 10): clamp the actual applied effort.
     applied.clear();
-    for (auto e:arms) {
+    for (size_t index=0;index<arms.size();++index) {
+      auto e=arms[index]; double armEffort=armEfforts[index];
       auto u=ecm.Component<components::JointForceCmd>(e);
       if(u && !u->Data().empty()) u->Data()[0]=std::clamp(u->Data()[0],-armEffort,armEffort);
       applied.push_back(u && !u->Data().empty()?u->Data()[0]:0.);

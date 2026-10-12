@@ -6,6 +6,8 @@ import math
 from pathlib import Path
 import numpy as np
 from .clearance import GearClearance
+from .effort import ordered_arm_effort_limits, arm_effort_ratios
+from .core import ARM_NAMES
 
 def longest_saturation(rows):
     longest=current=0.
@@ -103,8 +105,20 @@ def evaluate(directory):
         if 'tilt_effort0' in rows[0]:
             result['max_tilt_effort_nm']=max(abs(float(r[f'tilt_effort{i}'])) for r in rows for i in range(6))
         model=json.loads((directory/'model.json').read_text())
-        result['rotor_mode']=model['mode']=='px4_actuators'
-        result['passed'] &= result['sampled_gear_clearance_pass'] and result['max_arm_effort_nm']<model['config']['arm_effort'] and result['rotor_mode']
+        limits=ordered_arm_effort_limits(model,allow_legacy=True)
+        names=[name for side in ('left','right') for name in ARM_NAMES[side]]
+        peaks=np.max(np.abs([[float(r[f'effort{i}']) for i in range(10)] for r in rows]),axis=0)
+        result['arm_effort_limits_nm']=dict(zip(names,limits.tolist()))
+        result['max_arm_effort_per_joint_nm']=dict(zip(names,peaks.tolist()))
+        result['max_arm_effort_ratio']=float(np.max(arm_effort_ratios(peaks,limits)))
+        result['arm_effort_limits_pass']=bool(np.all(peaks<=limits+1e-6))
+        result['rotor_mode']=model['mode'] in ('px4_actuators','px4_native')
+        result['passed'] &= result['sampled_gear_clearance_pass'] and result['arm_effort_limits_pass'] and result['rotor_mode']
+    model=json.loads((directory/'model.json').read_text())
+    if model['mode']=='px4_native':
+        evidence=json.loads((directory/'native_chain.json').read_text()) if (directory/'native_chain.json').exists() else {}
+        result['native_control_chain']=evidence
+        result['passed'] &= bool(evidence) and not evidence.get('ros_publishes_actuators',True)
     (directory/'metrics.json').write_text(json.dumps(result,indent=2))
     return result
 

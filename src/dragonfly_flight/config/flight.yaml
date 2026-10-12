@@ -8,7 +8,7 @@ tilt_rate: 0.5
 tilt_effort: 8.0
 tilt_kp: 40.0
 tilt_kd: 0.25
-arm_effort: 5.0
+# Arm effort limits are generated from the common model_dimensions.yaml / URDF.
 arm_speed: 0.10
 arm_acceleration: 0.20
 arm_step_degrees: 5.0

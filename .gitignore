@@ -7,3 +7,6 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .vscode/
+
+# Local reference originals; the reproducible PX4 adaptation is shipped as a patch.
+src/dragonfly_flight/config/px4_vector/original/

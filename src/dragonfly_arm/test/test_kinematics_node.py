@@ -94,7 +94,7 @@ def test_joint_state_named_mapping_partial_data_and_timestamps(node):
     pose = recorders["left"].messages[0]
     assert pose.header.frame_id == "left_base_link"
     assert pose.header.stamp == message.header.stamp
-    assert (pose.pose.position.x, pose.pose.position.y, pose.pose.position.z) == pytest.approx((.34616, 0, .34919))
+    assert (pose.pose.position.x, pose.pose.position.y, pose.pose.position.z) == pytest.approx((.34616, 0, .34959))
     message.position[0] = np.nan
     node.publish_forward_kinematics(message)
     message.position = []

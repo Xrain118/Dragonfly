@@ -1,131 +1,133 @@
-# Dragonfly 矢量六旋翼与双五轴机械臂
+# Dragonfly 全驱动倾转六旋翼与双五轴机械臂
 
-本工程使用 ROS 2 Humble、Gazebo Harmonic，按实物照片建立三组双电机、双轴倾转动力单元，以及机腹倒置安装的两套相同五轴机械臂。夹爪作为闭合的固定几何体；其开合执行器不算入机械臂五个运动关节。
+本工程面向搭载双机械臂的全驱动倾转六旋翼无人机，目标是实现双臂主从遥操作，并研究机械臂运动与飞行器之间的动力学耦合及控制。平台由三组双电机、双轴倾转动力单元组成，共六路旋翼推力和六个倾转关节；机腹倒置安装两套 RoArm-M3 五轴机械臂。
 
-原演示仍将机体固定在 z=1.60 m。新增 `dragonfly_flight` 从同一 Xacro 生成自由机体，通过 PX4 SITL、六路旋翼推力和三组双轴倾转飞行，机械臂使用物理力矩伺服。启动、键盘操作和自动验收见 [飞行与动臂说明](src/dragonfly_flight/README.md)。**质量、惯量和执行器仍为仿真估值，结果不代表实物抗扰性能；未接入 ESP32 硬件。**
+**截至 2026-10-12，工程已完成模型、原生 PX4 控制集成与无风 SITL 验证，尚未完成实机双臂主从遥操作或整机实飞验收。** Gazebo 中的夹爪保持闭合，开合执行器不计入每臂五个运动关节。
 
-## 尺寸和坐标
+## 当前进度
 
-所有长度为米、角度为弧度。集中参数文件：
+| 子系统 | 已完成 | 当前边界 |
+|---|---|---|
+| 整机与双臂模型 | 共用 Xacro/URDF，图纸尺寸、安装外参、质量汇总和逐关节峰值限幅 | 分段质量、质心、惯量及部分外形仍为估算 |
+| 双臂运动学 | FK、解析 IK、雅可比、工具位姿发布及左右 IK 服务 | 求解不自动下发动作；不保证全工作空间无碰撞 |
+| 飞行控制 | 原生 PX4 位置/速度与姿态/角速度控制，六电机六倾转非线性有界分配，独立机型 40160 | 适配 PX4 v1.16.2 的 SITL；硬件输出与执行器尚待标定 |
+| 仿真动臂 | effort 力矩伺服、折叠起飞后同步展开、±5° 键盘点动、限速、心跳停止和起落架间隙检查 | 当前手动动作一次只执行一只臂；不是双臂实机主从闭环 |
+| 监控与验收 | PlotJuggler 面板、CSV/ROS bag/ULog 记录、悬停/平移/左右动臂自动验收 | 最新成绩为 2026-10-09 的三轮无风仿真 |
+| 机械臂固件 | 已确认 ESP32/Arduino RoArm-M3 整臂控制源码及通信入口 | 固件位于仓库外；ROS 硬件对接、烧录版本确认和实机验收未完成 |
 
-`src/dragonfly_arm/config/model_dimensions.yaml`
+当前没有风场、抓取或接触作业，也没有专用动臂前馈、扰动观测器或学习补偿。模型与飞行验收结果不代表实物抗扰性能。
 
-- `measured`：用户提供的机架、动力单元和双臂安装间距。
-- `arm_kinematics`：RoArm-M3 源码当前启用的尺寸、初始姿态和运动关节软件限位，供 Python 与 URDF 共用。
-- `estimated`：照片估计与第一版设计假设。
-- `simulation`：展示用质量、限位、速度与力矩占位值，并非实物标定。
+## 系统架构
 
-机体原点为三角形几何中心；+X 指向 A 单元、+Y 向左、+Z 向上。动力单元安装中心的平面坐标为：
+默认飞行链路为：
 
-| 单元 | X | Y | Z |
-|---|---:|---:|---:|
-| A | 0.692820 | 0 | 0.06 |
-| B | -0.346410 | 0.600000 | 0.06 |
-| C | -0.346410 | -0.600000 | 0.06 |
+```text
+Gazebo 传感器 → PX4 EKF → PX4 位置/速度控制 → PX4 姿态/角速度控制
+             → PX4 非线性有界控制分配 → 六电机与六倾转伺服 → Gazebo
+ROS 2 → Offboard 位置轨迹与机械臂轨迹
+机械臂轨迹 → effort 控制器 → 关节力矩 → 整机多刚体动力学
+```
 
-三角形边长为 1.2 m。安装中心高度 0.06 m 为估计值。每组电机沿局部 Y 轴对称设置，轴心距 0.36 m；电机半径暂取 0.015 m、高 0.020 m。每个桨有三片叶片，桨半径 0.116 m；碰撞模型采用同半径的薄圆盘。
+默认 `px4_native` 模式由 PX4 输出飞行执行器指令，ROS 不发布电机/倾转指令。机械臂对机体的反作用由 Gazebo 多刚体动力学产生。控制使用 PX4 估计状态；Gazebo 真值用于起飞前原点对齐、评价、机体 TF 和动臂许可。实机接入时需要替换依赖真值的许可与对齐逻辑。
 
-倾转运动采用用户接受的近似：
-`Rz(单元方位角) × Rx(outer) × Ry(inner)`。两轴相交，outer 为径向，inner 在零位时为切向并随 outer 转动。零位所有桨盘水平；每组双电机随同一支架倾转。旋翼 link 的 +Z 为正推力方向，旋翼 link 的原点在桨毂中心。轴序、轴偏移、硬件零点和真实限位后续均需校准。
+整机模型质量为 **5.415 kg**，两臂各 **0.9735 kg**。原生控制使用固定的竖直构型标称质心与惯量，起飞、展开及动臂期间不随关节实时更新。旧 `px4_actuators` 模式保留 ROS 控制/分配调试路径；`ideal_wrench` 和 `physics` 用于物理诊断，不能作为旋翼飞行验收成绩。
 
-两套机械臂底座均位于机体中心下方 0.05 m，分别安装在 `y=+0.15 m`（左臂）和 `y=-0.15 m`（右臂），中心距严格为 0.30 m。中心控制板下方设置一块 `0.14 × 0.40 × 0.012 m` 的连续承载板，覆盖两套基座的完整投影；两根短适配器从承载板底面连续连接至机械臂基座。两臂同向平行安装，均绕 X 轴旋转 π，机械臂基座局部 +Z 朝机腹下方。轴序为：
-`底座回转 → 肩俯仰 → 肘俯仰 → 腕俯仰 → 末端轴向旋转`。
-关节轴在各自局部坐标系中为 Z、Y、Y、Y、Z；第五关节坐标系含末端安装角，其 +Z 沿末端偏置段方向。
-
-| 区段 | 源码位移向量（m） |
+| 目录/说明 | 内容 |
 |---|---|
-| 基座至肩 | `(0, 0, 0.12606)` |
-| 肩至肘，在肩转动后的局部系 | `(0.03000, 0, 0.23682)` |
-| 肘至腕，在肘转动后的局部系 | `(0, 0, 0.14449)` |
-| 腕至固定工具点，在腕转动后的局部系 | `(0.01369, 0, 0.17167)` |
+| [模型、参数与接口](src/dragonfly_arm/docs/model.md) | 坐标、几何、图纸/厂家参数与估算值、质量及力矩限幅、ROS 接口 |
+| [双臂运动学](src/dragonfly_arm/docs/kinematics.md) | FK/IK/雅可比、Python API、ROS 服务和舵机角度边界 |
+| [飞行与键盘动臂](src/dragonfly_flight/README.md) | 环境、启动、按键、监控、异常处置及验收命令 |
+| [原生 PX4 适配](src/dragonfly_flight/config/px4_vector/README.md) | 补丁、参数、通道映射、控制链和 C++ 回归入口 |
+| [历史验证记录](src/dragonfly_flight/docs/verification.md) | 2026-09-30 的旧 direct-actuator 结果及其限制 |
 
-旧的 0.40 m 总长近似已替换。固件初始姿态为 `[0, 0, π/2, 0, 0]`，相应工具点在各自基座坐标系中的位置为 `(0.34616, 0, 0.34919) m`。全零关节角与固件初始姿态不同。
+### 当前机械臂固件与姿态
 
-`left_tool0`、`right_tool0` 是源码固定工具参考点，夹爪开合不改变它。各臂关节限位依次为 `±π、±π/2、[0,π]、±π/2、±π`；倾转限位仍为 ±π/2。机械臂限位表示源码控制函数的理想弧度范围，真实舵机端点和零位需标定；肘部原始指令上限 3071 ticks 比理想 π 少一个编码器步。完整坐标定义、公式和实物参考边界见 [RoArm-M3 运动学说明](src/dragonfly_arm/docs/kinematics.md)。
+用户于 2026-10-12 确认，当前固件源代码位于本机 `C:\Users\LENOVO\Desktop\arm`：工程为 `RoArm-M3_example`，依赖库为 `src`。主程序为 `RoArm-M3_example.ino`，整臂控制与配置分别在 `RoArm-M3_module.h`、`RoArm-M3_config.h`。固件包含 UART JSON、Wi-Fi/HTTP 和 ESP-NOW 入口。该路径是本机外部源码位置，不是克隆本仓库后自动获得的内容；本次未导入或修改固件。
 
-## 工程组织与接口
+| 姿态 | 关节角（rad） | 用途 |
+|---|---|---|
+| 仿真折叠姿态 | `[0, 0, π/2, 0, 0]` | PX4 仿真在地面出生与起飞 |
+| 仿真竖直姿态 | `[0, 0, 0, 0, 0]` | 展开后的工作姿态，键盘 H/P 的基准 |
+| 当前固件自定义上电姿态 | `[0.124252444, -1.526310884, 2.997398460, -0.150330117, 0.006135923]`，夹爪另为 `3.129320807` | `moveToRecordedInitialPose()` 使用速度 100、加速度 8 发送目标，函数内部不等待精确到位 |
 
-- `urdf/dragonfly_arm.urdf.xacro`：整机入口及 ros2_control。
-- `urdf/vector_platform.xacro`：三角机架、起落架、倾转单元与三叶桨。
-- `urdf/five_axis_arm.xacro`：五轴机械臂与固定夹爪。
-- `urdf/geometry_macros.xacro`：几何、惯量和关节接口宏。
-- `worlds/model_preview.world`：内置地面和灯光的展示场景，避免启动时依赖在线模型下载。
+五轴顺序均为底座、肩、肘、腕俯仰、末端滚转；夹爪独立。上述固件状态来自源码检查，不等于已确认实物烧录版本。图纸模型采用末端偏移 13.29 mm，当前固件配置仍为 13.69 mm，硬件对接时需统一这一 0.40 mm 差异。
 
-原四旋翼文件已从有效源码移出，改造前副本保存在工作区 `log/model_before_vector_20260923/dragonfly_quadrotor.urdf.xacro`，不会安装为新模型。
+## 快速运行
 
-| 接口 | 内容 |
-|---|---|
-| `/left_arm_controller/follow_joint_trajectory` | `left_joint_1` 至 `left_joint_5`，按此顺序 |
-| `/right_arm_controller/follow_joint_trajectory` | `right_joint_1` 至 `right_joint_5`，按此顺序 |
-| `/tilt_controller/follow_joint_trajectory` | A outer/inner、B outer/inner、C outer/inner |
-| `/joint_states` | 16 个受控关节的位置、速度状态 |
-| `/left_arm/tool_pose`、`/right_arm/tool_pose` | `PoseStamped`，分别以 `left_base_link`、`right_base_link` 为参考系 |
-| `/left_arm/solve_ik`、`/right_arm/solve_ik` | `dragonfly_arm/srv/SolveIK`，仅返回逆解，不发送运动命令 |
-| `/tf`、`/tf_static`、`/robot_description` | 全机坐标与模型 |
+实际运行仓库为 WSL Ubuntu 的 `/home/ubuntu/Dragonfly`，远端为 `Xrain118/Dragonfly`；Windows 的 `Documents/ChatGPT/dragonfly` 保存本机输出，桌面镜像不作为运行源码入口。
 
-倾转关节完整名称为 `unit_a_outer_joint`、`unit_a_inner_joint`，B/C 同理。
-原 `/arm_controller/...` 接口不再保留。旧单臂或六轴命令必须改为左右两个五关节接口；不存在 `joint_6`，夹爪不参与运动控制。
+本机环境为 Ubuntu 22.04、ROS 2 Humble、Gazebo Harmonic 8.15、PX4 v1.16.2 和 Micro XRCE-DDS Agent v2.4.3；还需要匹配的 `px4_msgs` 与 `gz_ros2_control` 工作区。构建依赖与版本检查见 [运行说明](src/dragonfly_flight/README.md#构建与环境)。
 
-## 构建与启动
-
-在 WSL Ubuntu 终端执行，Windows 编辑器可以通过 WSL 远程连接打开同一工程。不要在 Windows 目录另建一份不同步的模型。
+在 WSL 终端执行：
 
 ```bash
 cd /home/ubuntu/Dragonfly
+bash src/dragonfly_flight/scripts/build.sh
+bash src/dragonfly_flight/scripts/sim.sh --gui --record
+```
+
+构建使用独立 `build-flight/install-flight`。等待起飞、双臂展开和机体再次稳定，终端显示 `ready=True` 后，在两个新终端分别运行：
+
+```bash
+bash /home/ubuntu/Dragonfly/src/dragonfly_flight/scripts/sim.sh keyboard
+bash /home/ubuntu/Dragonfly/src/dragonfly_flight/scripts/sim.sh monitor
+```
+
+键盘 `L/R` 选臂，`1～5` 选关节，`+/-` 点动 5°，Space 停止两臂并保持，H 回到竖直姿态，P 回放肩关节 +5° 动作。键盘终端需获得焦点；完整限位、心跳和退出行为见运行说明。一次只运行一套仿真。
+
+固定机体演示使用同一模型，机体固定在 z=1.60 m。完成上述构建后，在另一空闲终端执行：
+
+```bash
+cd /home/ubuntu/Dragonfly
+export PYTHONNOUSERSITE=1
 source /opt/ros/humble/setup.bash
 source /home/ubuntu/gz_ros2_control_ws/install/setup.bash
-colcon build --symlink-install --packages-select dragonfly_arm
-source install/setup.bash
-ros2 launch dragonfly_arm gazebo.launch.py
-```
-
-Gazebo Harmonic 的 `gz_ros2_control` 已按 Humble 分支安装到 `/home/ubuntu/gz_ros2_control_ws`。当前工程的 `install/setup.bash` 会链式加载该工作区，因此完成一次上述构建后，新终端日常启动只需 source ROS 2 和本工程：
-
-```bash
-source /opt/ros/humble/setup.bash
-source /home/ubuntu/Dragonfly/install/setup.bash
-ros2 launch dragonfly_arm gazebo.launch.py
-```
-
-演示等待控制器 active 后，先将双臂移到固件初始姿态，再运行小幅独立轨迹并返回初始姿态；随后运行六个倾转关节并回零：
-
-```bash
+source install-flight/setup.bash
 ros2 launch dragonfly_arm demo.launch.py
 ```
 
-无图形模式附加 `gui:=false`；只查看暂停模型使用
-`ros2 launch dragonfly_arm gazebo.launch.py paused:=true`。
-暂停时演示轨迹不会前进。不要同时启动两个使用同一 ROS/Gazebo 地址的实例。
+只查看模型使用 `gazebo.launch.py`；固定演示使用位置接口，自由飞行动臂使用力矩接口。
 
-Gazebo 启动文件同时启动运动学节点。仅使用计算服务时可执行 `ros2 run dragonfly_arm kinematics_node`；发布工具位姿还需要外部 `/joint_states`。Python API、服务请求示例和状态码见运动学说明。
+## 验证结果
 
-如果图形驱动异常，可在当前 WSL 终端设置
-`export LIBGL_ALWAYS_SOFTWARE=1` 后重启图形仿真。
+最新飞行验收日期为 **2026-10-09**，三轮均采用当前 5.415 kg 模型和独立机型 40160。每轮包含折叠起飞、双臂展开、30 s 固定臂悬停、四段平移和左右肩关节各一次 +5° 回放。
 
-## 验证
+| 轮次 | 悬停位置 RMS | 悬停姿态 RMS | 平移后 5 s 最大误差 | 动臂后 5 s 最大误差 | 左/右肩实际行程 | 结论 |
+|---|---:|---:|---:|---:|---:|---|
+| 1 | 5.42 cm | 1.04° | 6.59 cm | 5.58 cm | 4.83° / 4.85° | 通过 |
+| 2 | 4.22 cm | 0.52° | 5.47 cm | 1.49 cm | 4.83° / 4.84° | 通过 |
+| 3 | 4.83 cm | 0.57° | 4.50 cm | 3.69 cm | 4.84° / 4.85° | 通过 |
 
-```bash
-xacro src/dragonfly_arm/urdf/dragonfly_arm.urdf.xacro > /tmp/dragonfly_vector.urdf
-check_urdf /tmp/dragonfly_vector.urdf
-colcon test --packages-select dragonfly_arm --event-handlers console_direct+
-colcon test-result --verbose
-bash src/dragonfly_arm/test/smoke_test.sh
-```
+验收阈值：悬停位置 RMS ≤0.10 m、姿态 RMS ≤3°、连续饱和 ≤1 s；平移完成 5 s 后误差 ≤0.10 m；动臂峰值 ≤0.25 m/8°，动作完成 5 s 后误差 ≤0.10 m/3°，实际肩关节行程 ≥4.5°。三轮连续饱和均为 0 s，十个机械臂关节实际力矩均未超限，采样起落架间隙检查通过；这不构成全工作空间碰撞认证。
 
-测试涵盖源码初始位姿、全关节范围随机 FK→IK→FK 回算、多个构型与 ±π 等价角、基座/肘部奇异点、限位与不可达状态、雅可比有限差分、随机 URDF 对照及 ROS 输入校验；同时保留机架几何、16 个受控关节、倾转轴与惯量检查。冒烟测试启动 Gazebo Harmonic，检查四个控制器 active、16 个有限关节状态、两个工具位姿及两个 IK 服务，并等待双臂和倾转轨迹成功完成。可给脚本附加图片输出目录，在验证后拍摄三张真实 Gazebo 场景图。
+记录保存在本机 `log/drawing_native_acceptance_20261009_1`、`_2`、`_3`，包括模型、参数、控制链证明、CSV、曲线、ROS bag 和 ULog。日志不纳入仓库；2026-10-05 的旧 4.628 kg 模型成绩及 2026-09-30 的旧调试模式成绩另作历史记录，不混作当前结果。
 
-新模型仍使用简化碰撞体。小幅演示可用于检查模型运动；全部关节极限组合没有做无碰撞认证。增加真实飞行和风扰之前，需要标定质量/质心/惯量、推力参数、舵机轴线和控制时延，并建立可自由运动的飞行模型。
+2026-10-12 重新构建 PX4 与 ROS 两包，ROS 回归汇总 69 项（59 个 pytest 用例、10 个 CTest 入口）、9 项原生 PX4 C++ 检查及 16 项上游位置控制检查全部通过。重新生成的模型、PX4 参数和适配源码哈希与验收依据一致，三轮历史数据按当前规则复核通过；本次没有重新飞行三轮。2026-10-09 固定机体 Gazebo 冒烟测试也已通过，包含四个控制器、16 个关节状态、两套工具位姿及 IK 服务。
 
-仿真运行且未暂停时，可在另一 WSL 终端获取 Gazebo 场景渲染图：
+复验命令：
 
 ```bash
-source /opt/ros/humble/setup.bash
 cd /home/ubuntu/Dragonfly
-python3 src/dragonfly_arm/test/capture_gazebo.py log/model_validation
+export PYTHONNOUSERSITE=1
+source /opt/ros/humble/setup.bash
+source /home/ubuntu/gz_ros2_control_ws/install/setup.bash
+source /home/ubuntu/px4_ros2_ws/install/setup.bash
+source install-flight/setup.bash
+colcon test --build-base build-flight --install-base install-flight \
+  --packages-select dragonfly_arm dragonfly_flight --event-handlers console_direct+
+colcon test-result --test-result-base build-flight --verbose
+# 需要重新执行完整三轮飞行验收时：
+bash src/dragonfly_flight/test/run_acceptance.sh log/my_native_acceptance
 ```
 
-该工具需要 `ros_gz_image` 与 Pillow，只临时添加无碰撞的观察相机，截图后自动删除相机，不改变机器人关节。输出为整机斜视、侧视、双机械臂近景，可在 WSLg 窗口截图不正常时使用；它不依赖当前环境中与 NumPy 2 不兼容的 OpenCV 二进制包。
+## 下一阶段
+
+1. **硬件基线与标定**：确认各臂设备、舵机 ID/零位/方向/真实端点、肩部双舵机协同、安装外参、供电与固件版本；统一模型和固件参数。
+2. **主从映射与通信**：确定地面主臂、机载从臂及上位机分工，完成 ROS 硬件驱动、真实反馈、接管对齐、限速及失联恢复。
+3. **固定机体双臂实机闭环**：完成单关节、单臂、双臂连续输入、时延、掉线和长期运行验收。
+4. **实机飞控适配**：标定六电机与六倾转输出、推力、质量/质心/惯量和定位状态，替换依赖 Gazebo 真值的对齐与动臂许可；可与机械臂联调并行推进。
+5. **整机地面联调与逐级飞行**：先合并真实链路及故障场景，再按固定臂悬停、预设展开、单臂、双臂、实时遥操作逐级验证；抓取和接触作业另行验收。
 
 ## 许可证
 
-Copyright 2026 Xrain118。Apache License 2.0，详见 LICENSE。
+Copyright 2026 Xrain118。Apache License 2.0，详见 [LICENSE](LICENSE)。

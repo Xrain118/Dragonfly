@@ -146,7 +146,7 @@ def test_owner_dimensions_and_arm_mount(robot):
         assert arm_in_body[:3, 2] == pytest.approx([0, 0, -1], abs=1e-12)
         tip_in_arm = np.linalg.inv(poses[f"{side}_base_link"]) @ poses[f"{side}_tool0"]
         assert tip_in_arm == pytest.approx(KINEMATICS.forward(PARAMETERS.home))
-        assert tip_in_arm[:3, 3] == pytest.approx([0.34616, 0, 0.34919])
+        assert tip_in_arm[:3, 3] == pytest.approx([0.34616, 0, 0.34959])
         assert poses[f"{side}_tool0"][2, 3] > poses["left_skid"][2, 3] + 0.05
     assert np.linalg.norm(arm_bases["left"] - arm_bases["right"]) == pytest.approx(0.30)
     assert (arm_bases["left"] + arm_bases["right"]) / 2 == pytest.approx([0, 0, -0.05])
@@ -221,3 +221,29 @@ def test_finite_positive_inertias(robot):
         assert np.all(np.isfinite(eigenvalues))
         assert np.all(eigenvalues > 0)
         assert eigenvalues[-1] <= sum(eigenvalues[:-1]) + 1e-12
+
+
+def test_drawing_geometry_mass_and_peak_efforts(robot):
+    total_mass = sum(float(link.find('inertial/mass').get('value'))
+                     for link in robot.findall('link') if link.find('inertial') is not None)
+    assert total_mass == pytest.approx(5.415, abs=1e-12, rel=0)
+    parts = ('base', 'column', 'upper_arm', 'forearm', 'wrist', 'gripper')
+    weights = np.asarray([10, 8, 14, 10, 6, 10])
+    for side in ARMS:
+        links = [robot.find(f"link[@name='{side}_{part}_link']") for part in parts]
+        masses = [float(link.find('inertial/mass').get('value')) for link in links]
+        assert sum(masses) == pytest.approx(0.9735, abs=1e-12, rel=0)
+        assert masses == pytest.approx(0.9735 * weights / weights.sum())
+        base_box = links[0].find('visual/geometry/box')
+        assert float(base_box.get('size').split()[2]) == pytest.approx(0.003)
+        upper_rails = links[2].findall('visual')[:2]
+        bounds = [abs(float(v.find('origin').get('xyz').split()[1]))
+                  + float(v.find('geometry/box').get('size').split()[1]) / 2 for v in upper_rails]
+        assert 2 * max(bounds) == pytest.approx(0.0378)
+        column_sizes = [np.fromstring(v.find('geometry/box').get('size'), sep=' ')
+                        for v in links[1].findall('visual')]
+        assert sum(np.allclose(size, [0.035, 0.02472, 0.04522]) for size in column_sizes) == 2
+        assert sum(np.isclose(size[2], 0.05346) for size in column_sizes) == 2
+        efforts = [float(robot.find(f"joint[@name='{name}']/limit").get('effort')) for name in ARMS[side]]
+        assert efforts == pytest.approx([2.941995, 5.883990, 2.941995, 2.941995, 2.941995])
+    assert not any('table_clamp' in link.get('name') for link in robot.findall('link'))

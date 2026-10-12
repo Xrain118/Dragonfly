@@ -30,13 +30,13 @@ def test_source_parameters_and_home_pose():
     assert PARAMETERS.base_to_shoulder == pytest.approx(0.12606)
     assert (PARAMETERS.shoulder_to_elbow_x, PARAMETERS.shoulder_to_elbow_z) == pytest.approx((0.03, 0.23682))
     assert (PARAMETERS.elbow_to_wrist_x, PARAMETERS.elbow_to_wrist_z) == pytest.approx((0.0, 0.14449))
-    assert (PARAMETERS.wrist_to_tool_x, PARAMETERS.wrist_to_tool_z) == pytest.approx((0.01369, 0.17167))
+    assert (PARAMETERS.wrist_to_tool_x, PARAMETERS.wrist_to_tool_z) == pytest.approx((0.01329, 0.17167))
     assert PARAMETERS.home == pytest.approx((0.0, 0.0, np.pi / 2.0, 0.0, 0.0))
     assert PARAMETERS.lower == pytest.approx((-np.pi, -np.pi / 2.0, 0.0, -np.pi / 2.0, -np.pi))
     assert PARAMETERS.upper == pytest.approx((np.pi, np.pi / 2.0, np.pi, np.pi / 2.0, np.pi))
     pose = KINEMATICS.forward(PARAMETERS.home)
-    assert pose[:3, 3] == pytest.approx((0.34616, 0.0, 0.34919), abs=1.0e-12)
-    assert KINEMATICS.task_pose(PARAMETERS.home) == TaskPose(0.34616, 0.0, 0.34919, 0.0, 0.0)
+    assert pose[:3, 3] == pytest.approx((0.34616, 0.0, 0.34959), abs=1.0e-12)
+    assert KINEMATICS.task_pose(PARAMETERS.home) == TaskPose(0.34616, 0.0, 0.34959, 0.0, 0.0)
 
 
 @pytest.mark.parametrize(

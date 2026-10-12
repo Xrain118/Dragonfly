@@ -8,6 +8,7 @@ import numpy as np
 import yaml
 from scipy.spatial.transform import Rotation
 from .core import HOME, STOWED, VERTICAL, ARM_NAMES, TILT_NAMES, Platform
+from .effort import ordered_arm_effort_limits
 
 def element(parent, tag, value=None, **attributes):
     node = ET.SubElement(parent, tag, attributes)
@@ -67,6 +68,12 @@ def generate(arm_share, flight_share, output, mode='px4_actuators', step=.002):
     robot.remove(robot.find("link[@name='world']"))
     robot.remove(robot.find("joint[@name='world_to_uav']"))
     robot.remove(robot.find("gazebo[@reference='world']"))
+    arm_names = [name for side in ('left', 'right') for name in ARM_NAMES[side]]
+    arm_effort_limits = {
+        name: float(robot.find(f"joint[@name='{name}']/limit").get('effort'))
+        for name in arm_names
+    }
+    ordered_arm_effort_limits({'arm_effort_limits': arm_effort_limits})
     for j in robot.findall('joint'):
         if '_rotor_' in j.get('name'):
             j.set('type', 'continuous')
@@ -79,8 +86,9 @@ def generate(arm_share, flight_share, output, mode='px4_actuators', step=.002):
     stowed_mass, stowed_com, stowed_inertia = inertial_properties(robot,stowed_positions)
     if not np.isclose(stowed_mass,mass):raise ValueError('Arm pose changed total mass')
     model = Platform(dimensions, cfg, mass, com, inertia)
-    initial_arm_pose = STOWED if mode == 'px4_actuators' else VERTICAL
+    initial_arm_pose = STOWED if mode in ('px4_actuators', 'px4_native') else VERTICAL
     metadata = dict(dimensions=dimensions, config=cfg, mass=mass, com=com.tolist(), inertia=inertia.tolist(),
+                    arm_effort_limits=arm_effort_limits,
                     motor_constant=model.kf, max_thrust=model.max_thrust, mode=mode,
                     initial_arm_pose=initial_arm_pose.tolist(),stowed_com=stowed_com.tolist(),
                     stowed_inertia=stowed_inertia.tolist())
@@ -93,8 +101,8 @@ def generate(arm_share, flight_share, output, mode='px4_actuators', step=.002):
             j.remove(j.find('command_interface'))
         else:
             interface = j.find('command_interface'); interface.set('name', 'effort')
-            interface.find("param[@name='min']").text = str(-cfg['arm_effort'])
-            interface.find("param[@name='max']").text = str(cfg['arm_effort'])
+            interface.find("param[@name='min']").text = str(-arm_effort_limits[name])
+            interface.find("param[@name='max']").text = str(arm_effort_limits[name])
             element(j.find("state_interface[@name='position']"), 'param', initial_arm_pose[int(name[-1])-1], name='initial_value')
             element(j, 'state_interface', name='effort')
     controllers = yaml.safe_load((arm_share/'config/controllers.yaml').read_text())
@@ -132,11 +140,13 @@ def generate(arm_share, flight_share, output, mode='px4_actuators', step=.002):
             noise=element(element(body,'pressure'),'noise',type='gaussian');element(noise,'stddev',.1)
     physics = element(vehicle, 'plugin', filename='libdragonfly_physics.so', name='dragonfly::Physics')
     element(physics, 'gz:systems:priority', 10)
-    for key in ('tilt_rate', 'tilt_effort', 'tilt_kp', 'tilt_kd', 'arm_effort'):
+    for key in ('tilt_rate', 'tilt_effort', 'tilt_kp', 'tilt_kd'):
         element(physics, key, cfg[key])
+    for name, limit in arm_effort_limits.items():
+        element(physics, 'arm_effort_limit', limit, joint=name)
     element(physics, 'ideal', str(mode == 'ideal_wrench').lower())
     for k, (unit, side) in enumerate((u, s) for u in 'abc' for s in ('left', 'right')):
-        if mode != 'px4_actuators':
+        if mode not in ('px4_actuators', 'px4_native'):
             continue
         plugin = element(vehicle, 'plugin', filename='gz-sim-multicopter-motor-model-system', name='gz::sim::systems::MulticopterMotorModel')
         values = dict(jointName=f'unit_{unit}_rotor_{side}_joint', linkName=f'unit_{unit}_rotor_{side}_link',

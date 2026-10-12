@@ -2,6 +2,8 @@
 
 源码在 `/home/ubuntu/Dragonfly`。固定演示与自由飞行共用原 Xacro 和尺寸参数。飞行模式移除 world 固定关节，使用六个 Gazebo 电机、六个倾转力矩伺服和两个 effort 轨迹控制器。机械臂反作用来自多刚体动力学，没有额外注入“机械臂扰动力”。
 
+2026-10-05 已完成 Dragonfly 原生 PX4 矢量控制适配。默认 `px4_native` 使用独立机型 40160，位置/速度、姿态/角速度及六电机六伺服分配均由 PX4 完成；ROS 发布位置轨迹与机械臂轨迹。2026-10-09 按实物图纸更新几何、单臂质量和 12 V 逐关节峰值后，已用新 5.415 kg 模型重新通过三轮完整验收，结果见 [工程 README](../../README.md)。参数、通道、补丁及历史结果见 [原生 PX4 适配说明](config/px4_vector/README.md)。组长原五文件作为本机参考保留在该目录 `original/`，不纳入本次仓库提交。当前机械臂固件位于仓库外的 `C:\Users\LENOVO\Desktop\arm`，来源、姿态与实机接入状态见工程 README；本次没有修改固件。
+
 ## 构建与环境
 
 本机版本：Ubuntu 22.04、ROS 2 Humble、Gazebo Harmonic 8.15、PX4 v1.16.2、Micro XRCE-DDS Agent v2.4.3，以及 `/home/ubuntu/px4_ros2_ws` 的兼容消息。单独使用 `build-flight` / `install-flight`，原源码改动和构建目录保留。
@@ -16,9 +18,11 @@ source /home/ubuntu/px4_ros2_ws/install/setup.bash
 source install-flight/setup.bash
 ```
 
+构建脚本设置 `PYTHONNOUSERSITE=1`，PX4 使用的 `jsonschema` 必须可由系统 Python 导入；本机于 2026-10-12 补齐系统包 `python3-jsonschema`（Ubuntu 可执行 `sudo apt-get install python3-jsonschema`）。构建不会自动安装系统依赖。
+
 每个新终端执行 export/source。`PYTHONNOUSERSITE=1` 避免本机用户目录 NumPy 2 与系统 SciPy 冲突。
 
-构建脚本应用 `config/px4_mag_enu.patch` 并编译 PX4。补丁仅在 `PX4_GZ_MAG_ENU=1` 时将 Gazebo 机体 FLU 磁场转换为 PX4 FRD；原生 x500 默认路径保留。Gazebo 使用 ENU 地磁场和 gauss，磁偏角来自 Harmonic 在 Zurich 原点的磁场表。这些 SITL 参数不用于实机。
+构建脚本应用 `config/px4_vector/px4_v1.16.2_vector.patch` 与 `config/px4_mag_enu.patch` 并编译 PX4。补丁仅在 `PX4_GZ_MAG_ENU=1` 时将 Gazebo 机体 FLU 磁场转换为 PX4 FRD；原生 x500 默认路径保留。Gazebo 使用 ENU 地磁场和 gauss，磁偏角来自 Harmonic 在 Zurich 原点的磁场表。这些 SITL 参数不用于实机。
 
 ## 三种启动方式
 
@@ -33,7 +37,7 @@ ros2 launch dragonfly_arm gazebo.launch.py
 # 理想合力/合力矩调试，不启动 PX4 或旋翼模型
 ros2 run dragonfly_flight flight --mode ideal_wrench --scenario hover --gui
 
-# 从地面解锁、平滑起飞，保持悬停并开放键盘
+# 原生 PX4 从地面解锁、平滑起飞，保持悬停并开放键盘（默认模式）
 ros2 run dragonfly_flight flight --scenario manual --gui --record
 ```
 
@@ -101,16 +105,16 @@ Gazebo 真值验收：30 s 位置 RMS ≤0.10 m、姿态 RMS ≤3°、饱和不�
 
 ## 模型与控制边界
 
-Gazebo 传感器 → PX4 估计 → ROS 位置/几何姿态 PD 与有界分配 → PX4 direct_actuator 输出 → Gazebo。飞行循环 100 Hz、仿真时间；起飞前用真值对齐世界原点，起飞后控制反馈来自 PX4。真值用于评价、机体 TF 和动臂稳定条件。
+默认：Gazebo 传感器 → PX4 估计 → PX4 位置/速度控制 → PX4 姿态/角速度控制 → PX4 非线性有界分配 → Gazebo。ROS 仅发送 NED 位置轨迹，未创建飞行执行器发布者。显式 `--mode px4_actuators` 保留旧 ROS 控制/分配调试路径。ROS 轨迹与监测循环 100 Hz、仿真时间；起飞前用真值对齐世界原点，起飞后控制反馈来自 PX4。真值用于评价、机体 TF 和动臂稳定条件。
 
-总质量 4.628 kg。折叠构型质心约 `(0.02649,0,-0.08799)` m，竖直构型质心约 `(0.00951,0,-0.10556)` m，全机惯量由 URDF 合成。起飞和展开前稳定判定使用折叠构型标称参数；展开命令启动时一次性切换到竖直构型参数，整个展开及后续键盘动臂期间都不随关节实时更新，从而把构型变化的反作用保留为反馈控制器需要抑制的真实扰动。力矩统一以机体原点为参考。分配包含共同倾转轴、变化的旋翼位置和反扭矩，每周期最多三次有界最小二乘，均衡推力项抑制冗余解漂移。
+总质量 5.415 kg。折叠构型质心约 `(0.03533,0,-0.11626)` m，竖直构型质心约 `(0.01077,0,-0.14165)` m，全机惯量由更新后的 URDF 合成。每臂质量为 0.9735 kg，不含桌边固定夹；各实体质量分配、质心和惯量仍为简化估算，详见工程根 README。原生控制始终使用竖直构型标称质心与全惯量，折叠起飞、展开及后续动臂时不随关节实时更新，从而保留真实扰动。旧 direct_actuator 调试模式沿用折叠起飞、展开时切到竖直标称参数的两段策略。力矩统一以机体原点为参考。分配包含共同倾转轴、变化的旋翼位置和反扭矩，每周期最多三次有界最小二乘，均衡推力项抑制冗余解漂移。
 
-仿真假设：推重比 2、电机时间常数 0.05 s、反扭矩/推力比 0.02 m、倾转 ±π/2 / 0.5 rad/s / 8 N·m。两臂由 500 Hz effort 轨迹控制器输出力矩，执行前限幅 ±5 N·m。初始化一次 home，正常运行不重设关节位置。参数集中于 `config/flight.yaml`、原 `model_dimensions.yaml` 和生成的控制器配置，全部为可替换估值。
+仿真假设：推重比 2、电机时间常数 0.05 s、反扭矩/推力比 0.02 m、倾转 ±π/2 / 0.5 rad/s / 8 N·m。两臂由 500 Hz effort 轨迹控制器输出力矩，每臂按底座、肩、肘、腕、滚转顺序限幅为 `±[2.941995,5.883990,2.941995,2.941995,2.941995] N·m`。该数值来自 12 V ST3215 峰值力矩，肩部按两只舵机理想共同输出计算，不代表持续可用力矩。硬件参数仅保存在 `dragonfly_arm/config/model_dimensions.yaml`；生成的 `model.json.arm_effort_limits` 按完整关节名称保存，URDF、控制接口、Gazebo 实际限幅、饱和检测和验收共用同一来源。只有读取历史记录时兼容旧的标量限幅。厂家空载速度是资料值，运行速度和加速度仍沿用 `config/flight.yaml` 的保守值，不推测热模型或力矩—速度曲线。初始化一次 home，正常运行不重设关节位置。
 
 飞行中只下发关节力矩。Gazebo 物理系统在存在 `JointForceCmd` 时优先执行力矩，未启用位置或速度伺服作为辅助。
 
 `/dragonfly/truth` 是 `uav_base_link` 原点的 world ENU 真值。监控另发布 `/dragonfly/reference_pose`、`/dragonfly/position_error`、`/dragonfly/position_error_norm`、`/dragonfly/attitude_error`、`/dragonfly/attitude_error_norm`、`/dragonfly/arm_active` 和 `/dragonfly/ready`；位置误差定义为实际减目标，姿态分量为 roll/pitch/yaw，单位遵循 SI。`ready` 仅在部署完成、机体稳定且机械臂空闲时为真。`/dragonfly/efforts`、`/dragonfly/rotor_speeds` 用 CSV 字符串兼容当前 bridge。`/dragonfly/target` 仅在 manual 接受 world 位置目标，姿态始终保持 ENU 零航向水平。
 
-PX4 状态过期 0.2 仿真秒、非法状态、连续分配失败或离开已解锁 Offboard 将中止。监控先停止物理进程，再关闭本次子进程并保存日志，也监控控制进程卡住。Offboard 丢失设为终止，不依赖 x500 自动降落。直接执行器模式绕过原生着陆检测器的推力参考，因此关闭 SITL 自动着陆/起飞超时解锁计时，退出由本入口负责。
+PX4 估计过期 0.2 仿真秒、原生执行器/分配遥测过期 0.25 仿真秒、非法状态或离开已解锁 Offboard 将中止。分配器对非法求解连续三次输出清零，旧 ROS 分配模式则中止。监控先停止物理进程，再关闭本次子进程并保存日志，也监控控制进程卡住。Offboard 丢失设为终止，不依赖 x500 自动降落。直接执行器模式绕过原生着陆检测器的推力参考，因此关闭 SITL 自动着陆/起飞超时解锁计时，退出由本入口负责。
 
 本轮没有风场、实机标定、末端控制、抓取、动臂前馈或扰动观测器。同模型内部接触沿用原模型配置；几何间隙检查不能证明未建模接触的实物安全性。仿真结果不代表实物抗扰性能。

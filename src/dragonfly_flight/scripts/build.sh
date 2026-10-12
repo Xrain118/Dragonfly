@@ -15,6 +15,7 @@ if ! git -C /home/ubuntu/PX4-Autopilot apply --reverse --check "$patch_file" 2>/
   git -C /home/ubuntu/PX4-Autopilot apply --check "$patch_file"
   git -C /home/ubuntu/PX4-Autopilot apply "$patch_file"
 fi
+bash "$PWD/src/dragonfly_flight/scripts/apply_px4_vector.sh" /home/ubuntu/PX4-Autopilot
 make -C /home/ubuntu/PX4-Autopilot px4_sitl_default
 colcon build --build-base build-flight --install-base install-flight --symlink-install \
   --packages-select dragonfly_arm dragonfly_flight
